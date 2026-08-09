@@ -1,15 +1,39 @@
-import { invoke } from '@tauri-apps/api/core';
-import { check } from '@tauri-apps/plugin-updater';
-import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke, check, relaunch } from './tauri.js';
 import { loadModule } from './registry.js';
 
 // Define the global reactive app state using Svelte 5 $state
 export const appState = $state({
-  activeWorkspace: 'sales', // 'sales' | 'finance' | 'crm' | 'settings'
+  route: '/app/sales',
   version: '0.1.0',
   isEnterpriseActive: false,
   installedModules: [], // List of installed module metadata
   loadedComponents: {}, // Map of moduleId -> Svelte Component class
+
+  get activeWorkspace() {
+    if (this.route === '/app/sales') return 'sales';
+    if (this.route === '/app/finance') return 'finance';
+    if (this.route === '/app/crm') return 'crm';
+    if (this.route === '/app/settings') return 'settings';
+    
+    // Generic fallback for any other workspaces like /app/xxx
+    const match = this.route.match(/^\/app\/([^/]+)$/);
+    if (match) return match[1];
+    
+    return 'sales';
+  },
+
+  set activeWorkspace(ws) {
+    let targetRoute = `/app/${ws}`;
+    if (ws === 'sales') targetRoute = '/app/sales';
+    else if (ws === 'finance') targetRoute = '/app/finance';
+    else if (ws === 'crm') targetRoute = '/app/crm';
+    else if (ws === 'settings') targetRoute = '/app/settings';
+    
+    this.route = targetRoute;
+    if (typeof window !== 'undefined' && window.location && window.location.hash !== '#' + targetRoute) {
+      window.location.hash = targetRoute;
+    }
+  },
 
   // Chat panel state
   chatMessages: [
@@ -43,6 +67,13 @@ export function showToast(message) {
   }, 3500);
 }
 
+export function navigate(path) {
+  if (typeof window !== 'undefined' && window.location) {
+    window.location.hash = path;
+  }
+  appState.route = path;
+}
+
 // Fetch mirrored order list from SQLite
 pub_fn("fetchOrders");
 async function pub_fn(name) {} // Stub helper
@@ -50,7 +81,7 @@ async function pub_fn(name) {} // Stub helper
 export async function fetchOrders() {
   try {
     const list = await invoke('get_mirrored_orders');
-    appState.mirroredOrders = list;
+    appState.mirroredOrders = list.map(o => ({ ...o, id: o.so_id || o.id }));
   } catch (err) {
     console.error("Failed to fetch mirrored orders:", err);
   }

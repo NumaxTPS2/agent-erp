@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from './tauri.js';
 import { appState } from './store.svelte.js';
 
 export async function loadModule(moduleId) {

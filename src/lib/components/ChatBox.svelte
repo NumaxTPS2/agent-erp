@@ -1,7 +1,6 @@
 <script>
   import { appState } from '../store.svelte.js';
-  import { Channel } from '@tauri-apps/api/core';
-  import { invoke } from '@tauri-apps/api/core';
+  import { Channel, invoke } from '../tauri.js';
   import { tick } from 'svelte';
 
   let inputVal = $state('');
