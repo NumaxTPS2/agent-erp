@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
+  import { listen, isTauri } from './lib/tauri.js';
   import { 
     appState, 
     fetchOrders, 
@@ -11,7 +11,8 @@
     installUpdate,
     fetchModulesGallery,
     installModuleAction,
-    uninstallModuleAction
+    uninstallModuleAction,
+    navigate
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import MutationDialog from './lib/components/MutationDialog.svelte';
@@ -23,17 +24,34 @@
 
   // Initialize data on mount
   onMount(async () => {
-    try {
-      const { getVersion } = await import('@tauri-apps/api/app');
-      appState.version = await getVersion();
-    } catch (err) {
-      console.warn("Failed to fetch version from Tauri:", err);
+    if (isTauri) {
+      try {
+        const { getVersion } = await import('@tauri-apps/api/app');
+        appState.version = await getVersion();
+      } catch (err) {
+        console.warn("Failed to fetch version from Tauri:", err);
+      }
+    } else {
+      appState.version = '0.1.0';
     }
 
     await fetchOrders();
     await fetchAuditLogs();
     await fetchInstalledModules();
     await fetchModulesGallery();
+
+    // Hash router synchronization
+    const handleHashChange = () => {
+      const hash = location.hash.slice(1);
+      if (!hash) {
+        navigate('/app/sales');
+      } else {
+        appState.route = hash;
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    // Initial sync
+    handleHashChange();
 
     // Automatically listen to the background notification event from Rust
     const unlisten = await listen('notification-hub', (event) => {
@@ -66,12 +84,17 @@
     }
 
     return () => {
-      unlisten();
+      if (typeof unlisten === 'function') unlisten();
+      window.removeEventListener('hashchange', handleHashChange);
     };
   });
 
   function selectWorkspace(ws) {
-    appState.activeWorkspace = ws;
+    if (ws === 'sales') navigate('/app/sales');
+    else if (ws === 'finance') navigate('/app/finance');
+    else if (ws === 'crm') navigate('/app/crm');
+    else if (ws === 'settings') navigate('/app/settings');
+    else navigate(`/app/${ws}`);
   }
 
   // Svelte Action to safely mount dynamic vanilla components to a physical DIV node
@@ -106,7 +129,28 @@
   }
 </script>
 
-<div class="app-container">
+{#if appState.route === '/login'}
+  <div class="auth-placeholder">
+    <!-- TODO: Implement Login view in #28 -->
+    <h2>Login Page (Placeholder)</h2>
+  </div>
+{:else if appState.route === '/register'}
+  <div class="auth-placeholder">
+    <!-- TODO: Implement Register view in #29 -->
+    <h2>Register Page (Placeholder)</h2>
+  </div>
+{:else if appState.route === '/onboarding'}
+  <div class="auth-placeholder">
+    <!-- TODO: Implement Onboarding view in #29 -->
+    <h2>Onboarding Page (Placeholder)</h2>
+  </div>
+{:else if appState.route === '/select-tenant'}
+  <div class="auth-placeholder">
+    <!-- TODO: Implement Select Tenant view in #39 -->
+    <h2>Select Tenant Page (Placeholder)</h2>
+  </div>
+{:else}
+  <div class="app-container">
   <!-- Left Sidebar -->
   <aside class="sidebar">
     <div>
@@ -247,7 +291,7 @@
                   <div class="empty-notif">目前無新訂單或警報。</div>
                 {:else}
                   {#each appState.notifications as notif}
-                    <div class="notif-item" onclick={() => { selectWorkspace('sales'); isNotificationOpen = false; }}>
+                    <div class="notif-item" onclick={() => { navigate('/app/sales'); isNotificationOpen = false; }}>
                       <div class="notif-title">{notif.title}</div>
                       <div class="notif-body">{notif.message}</div>
                     </div>
@@ -467,7 +511,7 @@
             {#if mod.file_path.endsWith('.html')}
               <div class="dynamic-iframe-container glass-panel" style="height: 600px;">
                 <iframe 
-                  src="app-module://localhost/modules/{mod.id}_module.html" 
+                  src={isTauri ? `app-module://localhost/modules/${mod.id}_module.html` : `/mock_cdn/${mod.id}_module.html`}
                   class="crm-iframe"
                   title={mod.name}
                   sandbox="allow-scripts"
@@ -498,6 +542,7 @@
     <ChatBox />
   </main>
 </div>
+{/if}
 
 <!-- Security Confirmation dialog (Mutation Interceptor) -->
 <MutationDialog />
@@ -1080,5 +1125,19 @@
     height: 20px;
     stroke: currentColor;
     fill: none;
+  }
+
+  /* Auth Screen Placeholder Styles */
+  .auth-placeholder {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 1.25rem;
+    font-weight: 500;
   }
 </style>
