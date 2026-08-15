@@ -20,6 +20,7 @@
   import MutationDialog from './lib/components/MutationDialog.svelte';
   import LoginScreen from './lib/components/auth/LoginScreen.svelte';
   import RegisterWizard from './lib/components/auth/RegisterWizard.svelte';
+  import TenantPicker from './lib/components/auth/TenantPicker.svelte';
 
   let activeTab = $derived(appState.activeWorkspace);
   let activeOrderFilter = $state('all');
@@ -179,9 +180,7 @@
     <h2>Onboarding Page (Placeholder)</h2>
   </div>
 {:else if appState.route === '/select-tenant'}
-  <div class="auth-placeholder">
-    <h2>Select Tenant Page (Placeholder)</h2>
-  </div>
+  <TenantPicker />
 {:else}
   <div class="app-container">
   <!-- Left Sidebar -->

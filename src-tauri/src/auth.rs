@@ -193,10 +193,14 @@ async fn mock_dispatch<R: tauri::Runtime>(
                     }
 
                     let mock_token = format!("mock-token-{}", id);
-                    let active_tenant_id = tenants
-                        .first()
-                        .and_then(|t| t.get("id"))
-                        .and_then(|v| v.as_str());
+                    let active_tenant_id = if tenants.len() == 1 {
+                        tenants
+                            .first()
+                            .and_then(|t| t.get("id"))
+                            .and_then(|v| v.as_str())
+                    } else {
+                        None
+                    };
 
                     conn.execute(
                         "INSERT OR REPLACE INTO sessions (token, user_id, active_tenant_id, created_at)
@@ -315,6 +319,49 @@ async fn mock_dispatch<R: tauri::Runtime>(
                         "role": "admin"
                     }
                 ]
+            }))
+        }
+
+        ("POST", "/v1/auth/select-tenant") => {
+            let tenant_id = body
+                .get("tenant_id")
+                .and_then(|v| v.as_str())
+                .ok_or("auth: Missing tenant_id parameter")?;
+
+            let token = get_secure_token("access_token")?;
+
+            // Retrieve user from current session
+            let mut stmt = conn
+                .prepare("SELECT user_id FROM sessions WHERE token = ?1")
+                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+            let user_id: String = stmt
+                .query_row([&token], |row| row.get(0))
+                .map_err(|_| "auth: Session not found or invalid token".to_string())?;
+
+            // Verify if user is member of the tenant
+            let mut stmt_member = conn
+                .prepare("SELECT count(*) FROM user_tenants WHERE user_id = ?1 AND tenant_id = ?2")
+                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+            let is_member: i64 = stmt_member
+                .query_row([&user_id, tenant_id], |row| row.get(0))
+                .unwrap_or(0);
+
+            if is_member == 0 {
+                return Err("IAM_ERR_TENANT_NOT_ASSIGNED".to_string());
+            }
+
+            // Update session active tenant and return a scoped token
+            let new_token = format!("mock-scoped-token-{}", user_id);
+            conn.execute(
+                "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
+                (&new_token, tenant_id, &token),
+            )
+            .map_err(|e| format!("auth: Failed to update session token: {}", e))?;
+
+            Ok(json!({
+                "access_token": new_token,
+                "refresh_token": format!("mock-refresh-{}", user_id),
+                "status": "authenticated"
             }))
         }
 
@@ -747,5 +794,161 @@ mod tests {
         assert!(!res_val.to_string().contains("mock-token-usr_"));
         assert!(!res_val.to_string().contains("access_token"));
         assert!(!res_val.to_string().contains("refresh_token"));
+    }
+
+    #[tokio::test]
+    async fn test_select_tenant_success() {
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        // Seed user, tenant, member relation, and active session
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name) VALUES ('tnt1', 'tenant1', 'Tenant 1', 'Company 1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES ('u1', 'tnt1', 'admin')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-u1', 'u1', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        // Set mock token in keyring
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+
+        // Perform select-tenant call
+        let req_body = json!({
+            "tenant_id": "tnt1"
+        });
+        let res = api_call(
+            handle.clone(),
+            "POST".to_string(),
+            "/v1/auth/select-tenant".to_string(),
+            req_body,
+        )
+        .await;
+
+        assert!(res.is_ok());
+        let res_val = res.unwrap();
+        assert_eq!(
+            res_val.get("status").unwrap().as_str().unwrap(),
+            "authenticated"
+        );
+
+        // Verify tokens are updated and saved in keyring
+        let new_token = get_secure_token("access_token").unwrap();
+        assert_eq!(new_token, "mock-scoped-token-u1");
+    }
+
+    #[tokio::test]
+    async fn test_select_tenant_not_member() {
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        // Seed user and session, but NO user_tenant relationship to tnt2
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-u1', 'u1', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+
+        let req_body = json!({
+            "tenant_id": "tnt2"
+        });
+        let res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/auth/select-tenant".to_string(),
+            req_body,
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "IAM_ERR_TENANT_NOT_ASSIGNED");
+    }
+
+    #[tokio::test]
+    async fn test_login_multi_tenant_requires_selection() {
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        // Seed user with 2 tenants
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name) VALUES ('tnt1', 'tenant1', 'Tenant 1', 'Company 1')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name) VALUES ('tnt2', 'tenant2', 'Tenant 2', 'Company 2')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES ('u1', 'tnt1', 'admin')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES ('u1', 'tnt2', 'member')",
+            [],
+        )
+        .unwrap();
+
+        // Perform login
+        let req_body = json!({
+            "email": "test@example.com",
+            "password": "password123"
+        });
+        let login_res = api_call(
+            handle.clone(),
+            "POST".to_string(),
+            "/v1/auth/login".to_string(),
+            req_body,
+        )
+        .await;
+        assert!(login_res.is_ok());
+
+        // Get auth status
+        let status_res = get_auth_status(handle).await;
+        assert!(status_res.is_ok());
+
+        let status_val = status_res.unwrap();
+        // The user has multiple tenants, so they should need selection and activeTenant must be null
+        assert_eq!(
+            status_val.get("status").unwrap().as_str().unwrap(),
+            "needs_tenant_selection"
+        );
+        assert!(status_val.get("activeTenant").unwrap().is_null());
+        assert_eq!(
+            status_val.get("tenants").unwrap().as_array().unwrap().len(),
+            2
+        );
     }
 }
