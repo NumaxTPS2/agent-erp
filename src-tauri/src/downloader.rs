@@ -1,6 +1,6 @@
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use sha2::{Sha256, Digest};
 use tauri::{AppHandle, Manager};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -28,12 +28,19 @@ fn get_mock_cdn_dir(app_handle: &AppHandle) -> PathBuf {
         }
     }
     // Fallback in packaged standalone environments
-    app_handle.path().resource_dir().unwrap_or_else(|_| PathBuf::from(".")).join("mock_cdn")
+    app_handle
+        .path()
+        .resource_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("mock_cdn")
 }
 
 // Get the secure local modules directory in the AppData path
 fn get_modules_target_dir(app_handle: &AppHandle) -> PathBuf {
-    let mut path = app_handle.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("data"));
+    let mut path = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("data"));
     path.push("modules");
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
@@ -42,7 +49,10 @@ fn get_modules_target_dir(app_handle: &AppHandle) -> PathBuf {
 }
 
 fn get_db_path(app_handle: &AppHandle) -> PathBuf {
-    let mut path = app_handle.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut path = app_handle
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     if !path.exists() {
         let _ = fs::create_dir_all(&path);
     }
@@ -63,31 +73,49 @@ fn sanitize_svg(raw_svg: &str) -> Result<String, String> {
     if raw_svg.len() > 4000 {
         return Err("SVG string exceeds length limit of 4000 characters".to_string());
     }
-    
+
     // 2. Validate basic structure
     let trimmed = raw_svg.trim();
     if !trimmed.starts_with("<svg") || !trimmed.ends_with("</svg>") {
         return Err("Invalid SVG format: must start with <svg and end with </svg>".to_string());
     }
-    
+
     // 3. Blacklist dangerous tags (case-insensitive)
     let lower = trimmed.to_lowercase();
-    if lower.contains("<script") || lower.contains("</script")
-        || lower.contains("<iframe") || lower.contains("</iframe")
-        || lower.contains("<object") || lower.contains("</object")
-        || lower.contains("<embed") || lower.contains("</embed")
-        || lower.contains("<foreignobject") || lower.contains("</foreignobject") {
+    if lower.contains("<script")
+        || lower.contains("</script")
+        || lower.contains("<iframe")
+        || lower.contains("</iframe")
+        || lower.contains("<object")
+        || lower.contains("</object")
+        || lower.contains("<embed")
+        || lower.contains("</embed")
+        || lower.contains("<foreignobject")
+        || lower.contains("</foreignobject")
+    {
         return Err("Security Violation: Forbidden tag found in SVG".to_string());
     }
-    
+
     // 4. Blacklist dynamic javascript events and URI protocols
-    let forbidden_events = ["onload", "onclick", "onerror", "onmouseover", "onfocus", "onblur", "javascript:", "data:"];
+    let forbidden_events = [
+        "onload",
+        "onclick",
+        "onerror",
+        "onmouseover",
+        "onfocus",
+        "onblur",
+        "javascript:",
+        "data:",
+    ];
     for event in &forbidden_events {
         if lower.contains(event) {
-            return Err(format!("Security Violation: Forbidden event handler or protocol found: {}", event));
+            return Err(format!(
+                "Security Violation: Forbidden event handler or protocol found: {}",
+                event
+            ));
         }
     }
-    
+
     Ok(trimmed.to_string())
 }
 
@@ -103,42 +131,44 @@ pub async fn install_module(
 ) -> Result<(), String> {
     // 1. Sanitize SVG
     let safe_svg = sanitize_svg(&icon_svg)?;
-    
+
     // 2. Copy file from mock CDN in simulation
     let cdn_dir = get_mock_cdn_dir(&app_handle);
     let target_dir = get_modules_target_dir(&app_handle);
-    
+
     let src_file = cdn_dir.join(&download_url);
     if !src_file.exists() {
         return Err(format!("Module asset not found in CDN: {:?}", src_file));
     }
-    
-    let file_ext = Path::new(&download_url).extension().and_then(|s| s.to_str()).unwrap_or("js");
+
+    let file_ext = Path::new(&download_url)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("js");
     let target_filename = format!("{}_module.{}", module_id, file_ext);
     let target_file = target_dir.join(&target_filename);
-    
-    fs::copy(&src_file, &target_file)
-        .map_err(|e| format!("Failed to copy module file: {}", e))?;
-    
+
+    fs::copy(&src_file, &target_file).map_err(|e| format!("Failed to copy module file: {}", e))?;
+
     // Verify SHA-256 (in production this matches cloud, in local simulation we scan the file)
     let _computed_hash = calculate_sha256(&target_file)?;
-    
+
     // 3. Register in SQLite database
     let db_path = get_db_path(&app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open DB: {}", e))?;
-    
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+
     let workspace_id = match module_id.as_str() {
         "sales_bi" => "finance",
         "crm" => "crm",
         _ => &module_id,
     };
-    
+
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    
+
     conn.execute(
         "INSERT OR REPLACE INTO modules (id, name, version, file_path, sha256, workspace, icon_svg, installed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -153,31 +183,34 @@ pub async fn install_module(
             now_secs
         )
     ).map_err(|e| format!("Failed to save module to DB: {}", e))?;
-    
+
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_installed_modules(app_handle: AppHandle) -> Result<Vec<ModuleMetadata>, String> {
     let db_path = get_db_path(&app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open DB: {}", e))?;
-    
-    let mut stmt = conn.prepare("SELECT id, name, version, file_path, sha256, workspace, icon_svg FROM modules")
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+
+    let mut stmt = conn
+        .prepare("SELECT id, name, version, file_path, sha256, workspace, icon_svg FROM modules")
         .map_err(|e| e.to_string())?;
-    
-    let rows = stmt.query_map([], |row| {
-        Ok(ModuleMetadata {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            version: row.get(2)?,
-            file_path: row.get(3)?,
-            sha256: row.get(4)?,
-            workspace: row.get(5)?,
-            icon_svg: row.get(6)?,
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ModuleMetadata {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                version: row.get(2)?,
+                file_path: row.get(3)?,
+                sha256: row.get(4)?,
+                workspace: row.get(5)?,
+                icon_svg: row.get(6)?,
+            })
         })
-    }).map_err(|e| e.to_string())?;
-    
+        .map_err(|e| e.to_string())?;
+
     let mut list = Vec::new();
     for row in rows {
         if let Ok(meta) = row {
@@ -187,7 +220,7 @@ pub async fn get_installed_modules(app_handle: AppHandle) -> Result<Vec<ModuleMe
             }
         }
     }
-    
+
     Ok(list)
 }
 
@@ -205,27 +238,27 @@ pub async fn get_module_source(app_handle: AppHandle, module_id: String) -> Resu
 pub async fn uninstall_module(app_handle: AppHandle, module_id: String) -> Result<(), String> {
     // 1. Delete database entries
     let db_path = get_db_path(&app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open DB: {}", e))?;
-    
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+
     conn.execute("DELETE FROM modules WHERE id = ?1", [&module_id])
         .map_err(|e| format!("Failed to delete module from DB: {}", e))?;
-        
+
     // Also drop dynamic tables created by the module (Option B protection)
     let dynamic_table = format!("module_{}_cache", module_id);
     let _ = conn.execute(&format!("DROP TABLE IF EXISTS {}", dynamic_table), []);
-    
+
     // 2. Delete module files on disk
     let target_dir = get_modules_target_dir(&app_handle);
     let js_path = target_dir.join(format!("{}_module.js", module_id));
     let html_path = target_dir.join(format!("{}_module.html", module_id));
-    
+
     if js_path.exists() {
         let _ = fs::remove_file(js_path);
     }
     if html_path.exists() {
         let _ = fs::remove_file(html_path);
     }
-    
+
     Ok(())
 }

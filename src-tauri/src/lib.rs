@@ -1,9 +1,15 @@
 use std::fs;
-use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, Emitter};
+use std::path::PathBuf;
 use tauri::http::Response;
+use tauri::{AppHandle, Emitter, Manager};
 
+mod auth;
 mod downloader;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_DB_PATH: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+}
 
 #[derive(serde::Serialize, Clone)]
 pub struct ChatResponseChunk {
@@ -12,21 +18,38 @@ pub struct ChatResponseChunk {
 }
 
 // Locate SQLite DB path in secure AppData folder
-fn get_db_path(app_handle: &AppHandle) -> PathBuf {
-    let mut path = app_handle.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if !path.exists() {
-        let _ = fs::create_dir_all(&path);
+pub(crate) fn get_db_path<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> PathBuf {
+    #[cfg(test)]
+    {
+        let _ = app_handle;
+        TEST_DB_PATH.with(|path| {
+            if let Some(ref p) = *path.borrow() {
+                p.clone()
+            } else {
+                PathBuf::from("target/agent_erp_test.db")
+            }
+        })
     }
-    path.push("agent_erp.db");
-    path
+    #[cfg(not(test))]
+    {
+        let mut path = app_handle
+            .path()
+            .app_data_dir()
+            .unwrap_or_else(|_| PathBuf::from("."));
+        if !path.exists() {
+            let _ = fs::create_dir_all(&path);
+        }
+        path.push("agent_erp.db");
+        path
+    }
 }
 
 // Database Initialization (SQLite)
-fn init_db(app_handle: &AppHandle) -> Result<(), String> {
+fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), String> {
     let db_path = get_db_path(app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open DB: {}", e))?;
-    
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS modules (
             id TEXT PRIMARY KEY,
@@ -39,10 +62,14 @@ fn init_db(app_handle: &AppHandle) -> Result<(), String> {
             installed_at INTEGER NOT NULL
         )",
         [],
-    ).map_err(|e| format!("Failed to create modules table: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create modules table: {}", e))?;
 
     // Migration to add icon_svg column to modules if it does not exist
-    let _ = conn.execute("ALTER TABLE modules ADD COLUMN icon_svg TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE modules ADD COLUMN icon_svg TEXT NOT NULL DEFAULT ''",
+        [],
+    );
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS mirrored_orders (
@@ -57,7 +84,8 @@ fn init_db(app_handle: &AppHandle) -> Result<(), String> {
             created_at INTEGER NOT NULL
         )",
         [],
-    ).map_err(|e| format!("Failed to create mirrored_orders table: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create mirrored_orders table: {}", e))?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS audit_logs (
@@ -69,10 +97,56 @@ fn init_db(app_handle: &AppHandle) -> Result<(), String> {
             timestamp INTEGER NOT NULL
         )",
         [],
-    ).map_err(|e| format!("Failed to create audit_logs table: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create audit_logs table: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| format!("Failed to create users table: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tenants (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            company_name TEXT NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| format!("Failed to create tenants table: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_tenants (
+            user_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            PRIMARY KEY (user_id, tenant_id)
+        )",
+        [],
+    )
+    .map_err(|e| format!("Failed to create user_tenants table: {}", e))?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            active_tenant_id TEXT,
+            created_at INTEGER NOT NULL
+        )",
+        [],
+    )
+    .map_err(|e| format!("Failed to create sessions table: {}", e))?;
 
     // Seed mock order if empty
-    let mut stmt = conn.prepare("SELECT count(*) FROM mirrored_orders").map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT count(*) FROM mirrored_orders")
+        .map_err(|e| e.to_string())?;
     let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap_or(0);
     if count == 0 {
         conn.execute(
@@ -103,24 +177,34 @@ async fn initialize_module_db(
     create_table_sql: String,
 ) -> Result<(), String> {
     let sql_lower = create_table_sql.to_lowercase();
-    
+
     // Strict SQL validation
-    if sql_lower.contains("drop") || sql_lower.contains("alter") || sql_lower.contains("delete") 
-        || sql_lower.contains("insert") || sql_lower.contains("update") {
-        return Err("Security Violation: SQL statement contains forbidden command in table initialization".to_string());
+    if sql_lower.contains("drop")
+        || sql_lower.contains("alter")
+        || sql_lower.contains("delete")
+        || sql_lower.contains("insert")
+        || sql_lower.contains("update")
+    {
+        return Err(
+            "Security Violation: SQL statement contains forbidden command in table initialization"
+                .to_string(),
+        );
     }
-    
+
     if !sql_lower.trim().starts_with("create table") {
         return Err("Security Violation: SQL query must start with CREATE TABLE".to_string());
     }
-    
+
     let system_tables = ["modules", "mirrored_orders", "audit_logs"];
     for table in &system_tables {
         if sql_lower.contains(table) {
-            return Err(format!("Security Violation: Forbidden system table name detected: {}", table));
+            return Err(format!(
+                "Security Violation: Forbidden system table name detected: {}",
+                table
+            ));
         }
     }
-    
+
     // Parse and verify table name prefix: "module_{module_id}_"
     let tokens: Vec<&str> = create_table_sql.split_whitespace().collect();
     let mut table_name = "";
@@ -128,10 +212,14 @@ async fn initialize_module_db(
         let token = tokens[i].to_lowercase();
         if token == "table" {
             if i + 1 < tokens.len() {
-                let next = tokens[i+1];
-                if next.to_lowercase() == "if" && i + 3 < tokens.len() && tokens[i+2].to_lowercase() == "not" && tokens[i+3].to_lowercase() == "exists" {
+                let next = tokens[i + 1];
+                if next.to_lowercase() == "if"
+                    && i + 3 < tokens.len()
+                    && tokens[i + 2].to_lowercase() == "not"
+                    && tokens[i + 3].to_lowercase() == "exists"
+                {
                     if i + 4 < tokens.len() {
-                        table_name = tokens[i+4];
+                        table_name = tokens[i + 4];
                     }
                 } else {
                     table_name = next;
@@ -140,26 +228,30 @@ async fn initialize_module_db(
             break;
         }
     }
-    
-    let cleaned_table_name = table_name.trim_matches(|c: char| c == '(' || c == ')' || c == ';' || c.is_whitespace());
+
+    let cleaned_table_name =
+        table_name.trim_matches(|c: char| c == '(' || c == ')' || c == ';' || c.is_whitespace());
     let prefix = format!("module_{}_", module_id);
-    
+
     if !cleaned_table_name.starts_with(&prefix) {
         return Err(format!(
             "Security Violation: Table name '{}' must start with prefix '{}' for module '{}'",
             cleaned_table_name, prefix, module_id
         ));
     }
-    
+
     // Open DB and execute CREATE TABLE statement
     let db_path = get_db_path(&app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open DB: {}", e))?;
-    
+    let conn =
+        rusqlite::Connection::open(&db_path).map_err(|e| format!("Failed to open DB: {}", e))?;
+
     conn.execute(&create_table_sql, [])
         .map_err(|e| format!("Database migration failed: {}", e))?;
-    
-    println!("Module '{}' dynamically initialized table '{}'", module_id, cleaned_table_name);
+
+    println!(
+        "Module '{}' dynamically initialized table '{}'",
+        module_id, cleaned_table_name
+    );
     Ok(())
 }
 
@@ -169,7 +261,7 @@ async fn initialize_module_db(
 async fn simulate_agent_chat(
     workspace: String,
     _message: String,
-    channel: tauri::ipc::Channel<ChatResponseChunk>
+    channel: tauri::ipc::Channel<ChatResponseChunk>,
 ) -> Result<(), String> {
     tokio::spawn(async move {
         let response_text = match workspace.as_str() {
@@ -199,7 +291,7 @@ async fn simulate_agent_chat(
 async fn simulate_webhook_order(app_handle: AppHandle) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-    
+
     // Clear previous simulation to support multiple testing runs
     let _ = conn.execute("DELETE FROM mirrored_orders WHERE so_id = 'SO-9922'", []);
 
@@ -241,17 +333,22 @@ async fn simulate_webhook_order(app_handle: AppHandle) -> Result<(), String> {
 // 3. Mutation Interceptor Command
 // Removed 'pub' to resolve E0255 re-import macro name collisions in lib.rs
 #[tauri::command]
-async fn confirm_mutation(app_handle: AppHandle, mutation_id: String, approved: bool) -> Result<(), String> {
+async fn confirm_mutation(
+    app_handle: AppHandle,
+    mutation_id: String,
+    approved: bool,
+) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
-    
+
     let status = if approved { "approved" } else { "rejected" };
-    
+
     // Update local ledger status
     conn.execute(
         "UPDATE mirrored_orders SET status = ?1 WHERE so_id = ?2",
         (status, &mutation_id),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     // Write audit log trail
     let timestamp = std::time::SystemTime::now()
@@ -269,9 +366,10 @@ async fn confirm_mutation(app_handle: AppHandle, mutation_id: String, approved: 
             format!(r#"{{"so_id": "{}"}}"#, mutation_id),
             status,
             "Peter",
-            timestamp
+            timestamp,
         ),
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -283,7 +381,7 @@ async fn get_mirrored_orders(app_handle: AppHandle) -> Result<serde_json::Value,
     let db_path = get_db_path(&app_handle);
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare("SELECT so_id, customer_name, po_reference, items_json, total_amount, profit_margin, capacity_usage, status, created_at FROM mirrored_orders ORDER BY created_at DESC").map_err(|e| e.to_string())?;
-    
+
     let rows = stmt.query_map([], |row| {
         Ok(serde_json::json!({
             "so_id": row.get::<_, String>(0)?,
@@ -313,7 +411,7 @@ async fn get_audit_logs(app_handle: AppHandle) -> Result<serde_json::Value, Stri
     let db_path = get_db_path(&app_handle);
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
     let mut stmt = conn.prepare("SELECT id, action_type, arguments, decision, operator, timestamp FROM audit_logs ORDER BY timestamp DESC").map_err(|e| e.to_string())?;
-    
+
     let rows = stmt.query_map([], |row| {
         Ok(serde_json::json!({
             "id": row.get::<_, String>(0)?,
@@ -352,12 +450,20 @@ pub fn run() {
             let path = request.uri().path();
             // Clean dynamic module route
             let path = path.trim_start_matches('/');
-            
+
             // Map protocol request to AppData/modules/ directory
-            let mut file_path = app_handle.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("data"));
+            let mut file_path = app_handle
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| PathBuf::from("data"));
             file_path.push(path);
 
-            println!("[Scheme Handler] Request Path: '{}', Resolved path: {:?}, Exists: {}", path, file_path, file_path.exists());
+            println!(
+                "[Scheme Handler] Request Path: '{}', Resolved path: {:?}, Exists: {}",
+                path,
+                file_path,
+                file_path.exists()
+            );
 
             if !file_path.exists() {
                 return Response::builder().status(404).body(Vec::new()).unwrap();
@@ -404,7 +510,10 @@ pub fn run() {
             downloader::install_module,
             downloader::get_installed_modules,
             downloader::get_module_source,
-            downloader::uninstall_module
+            downloader::uninstall_module,
+            auth::api_call,
+            auth::get_auth_status,
+            auth::logout
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

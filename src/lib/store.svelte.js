@@ -57,7 +57,13 @@ export const appState = $state({
   updateProgress: { percent: 0, downloaded: 0, total: 100 },
   activeUpdate: null, // Tauri updater instance
   toastMessage: null, // Toast popup message
-  modulesGallery: [] // List of available modules in cloud store
+  modulesGallery: [], // List of available modules in cloud store
+  
+  // Auth state
+  authStatus: 'unauthenticated', // 'unauthenticated' | 'needs_tenant_selection' | 'needs_tenant_creation' | 'authenticated'
+  authUser: null,
+  authTenants: [],
+  activeTenant: null
 });
 
 export function showToast(message) {
@@ -387,3 +393,60 @@ function runMockUpgrade() {
     }
   }, 100);
 }
+
+export async function checkAuthStatus() {
+  try {
+    const res = await invoke('get_auth_status');
+    appState.authStatus = res.status;
+    appState.authUser = res.user;
+    appState.authTenants = res.tenants;
+    appState.activeTenant = res.activeTenant;
+    return res;
+  } catch (err) {
+    console.error("Failed to check auth status:", err);
+    appState.authStatus = 'unauthenticated';
+    appState.authUser = null;
+    appState.authTenants = [];
+    appState.activeTenant = null;
+  }
+}
+
+export async function login(email, password) {
+  const res = await invoke('api_call', {
+    method: 'POST',
+    path: '/v1/auth/login',
+    body: { email, password, client_type: 'app' }
+  });
+  await checkAuthStatus();
+  return res;
+}
+
+export async function registerTenant(tenantName, companyName, adminEmail, adminPassword, tenantCode) {
+  const res = await invoke('api_call', {
+    method: 'POST',
+    path: '/v1/auth/register-tenant',
+    body: {
+      tenant_name: tenantName,
+      company_name: companyName,
+      admin_email: adminEmail,
+      admin_password: adminPassword,
+      tenant_code: tenantCode
+    }
+  });
+  await checkAuthStatus();
+  return res;
+}
+
+export async function logoutAction() {
+  try {
+    await invoke('logout');
+  } catch (err) {
+    console.error("Failed to call logout command:", err);
+  }
+  appState.authStatus = 'unauthenticated';
+  appState.authUser = null;
+  appState.authTenants = [];
+  appState.activeTenant = null;
+  navigate('/login');
+}
+
