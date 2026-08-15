@@ -24,10 +24,12 @@ let mockUsers = [
   { id: "usr_mock_peter", email: "peter@example.com", password: "password123" }
 ];
 let mockTenants = [
-  { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." }
+  { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." },
+  { id: "tnt_mock_2", code: "alpha", name: "Alpha Corporation", company_name: "Alpha Corp." }
 ];
 let mockUserTenants = [
-  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_1", role: "admin" }
+  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_1", role: "admin" },
+  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_2", role: "member" }
 ];
 let mockSessions = null; // { token, user_id, active_tenant_id }
 
@@ -228,7 +230,7 @@ export async function invoke(cmd, args = {}) {
           role: ut.role
         };
       });
-      const activeTenant = tenants.find(t => t.id === mockSessions.active_tenant_id) || tenants[0] || null;
+      const activeTenant = tenants.find(t => t.id === mockSessions.active_tenant_id) || null;
       let status = "unauthenticated";
       if (tenants.length === 0) {
         status = "needs_tenant_creation";
@@ -266,7 +268,7 @@ export async function invoke(cmd, args = {}) {
         mockSessions = {
           token: `mock-token-${user.id}`,
           user_id: user.id,
-          active_tenant_id: tenants[0]?.id || null
+          active_tenant_id: tenants.length === 1 ? tenants[0].id : null
         };
         return {
           user: { id: user.id, email: user.email },
@@ -294,6 +296,28 @@ export async function invoke(cmd, args = {}) {
         return {
           user: { id: user_id, email: admin_email },
           tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
+        };
+      }
+      if (method === 'POST' && path === '/v1/auth/select-tenant') {
+        const { tenant_id } = body;
+        if (!mockSessions) {
+          throw "auth: Session not found";
+        }
+        const userTnts = mockUserTenants.filter(ut => ut.user_id === mockSessions.user_id);
+        const isMember = userTnts.some(ut => ut.tenant_id === tenant_id);
+        if (!isMember) {
+          throw "IAM_ERR_TENANT_NOT_ASSIGNED";
+        }
+        mockSessions.active_tenant_id = tenant_id;
+
+        // Generate new mock scoped token
+        const new_token = `mock-scoped-token-${mockSessions.user_id}`;
+        mockSessions.token = new_token;
+
+        return {
+          access_token: new_token,
+          refresh_token: `mock-refresh-${mockSessions.user_id}`,
+          status: "authenticated"
         };
       }
       throw `Mock API endpoint not found: ${method} ${path}`;

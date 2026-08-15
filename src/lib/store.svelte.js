@@ -450,3 +450,13 @@ export async function logoutAction() {
   navigate('/login');
 }
 
+export async function selectTenantAction(tenantId) {
+  const res = await invoke('api_call', {
+    method: 'POST',
+    path: '/v1/auth/select-tenant',
+    body: { tenant_id: tenantId }
+  });
+  await checkAuthStatus();
+  return res;
+}
+
