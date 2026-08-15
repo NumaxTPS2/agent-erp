@@ -18,6 +18,19 @@ let mockOrders = [
 
 let mockAuditLogs = [];
 let mockInstalledModules = [];
+
+// Local mock database for user authentication
+let mockUsers = [
+  { id: "usr_mock_peter", email: "peter@example.com", password: "password123" }
+];
+let mockTenants = [
+  { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." }
+];
+let mockUserTenants = [
+  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_1", role: "admin" }
+];
+let mockSessions = null; // { token, user_id, active_tenant_id }
+
 let mockLlmProviders = [
   { id: "openai", label: "OpenAI GPT-4o", base_url: "https://api.openai.com/v1", model_name: "gpt-4o", requires_key: true, has_key: false, active: true },
   { id: "deepseek", label: "DeepSeek V3 (BYOK)", base_url: "https://api.deepseek.com/v1", model_name: "deepseek-chat", requires_key: true, has_key: false, active: false },
@@ -192,6 +205,102 @@ export async function invoke(cmd, args = {}) {
           }
         }, 30);
       }
+      return null;
+    }
+    
+    case 'get_auth_status': {
+      if (!mockSessions) {
+        return {
+          status: "unauthenticated",
+          user: null,
+          tenants: [],
+          activeTenant: null
+        };
+      }
+      const user = mockUsers.find(u => u.id === mockSessions.user_id);
+      const userTnts = mockUserTenants.filter(ut => ut.user_id === mockSessions.user_id);
+      const tenants = userTnts.map(ut => {
+        const t = mockTenants.find(tnt => tnt.id === ut.tenant_id);
+        return {
+          id: t.id,
+          code: t.code,
+          name: t.name,
+          role: ut.role
+        };
+      });
+      const activeTenant = tenants.find(t => t.id === mockSessions.active_tenant_id) || tenants[0] || null;
+      let status = "unauthenticated";
+      if (tenants.length === 0) {
+        status = "needs_tenant_creation";
+      } else if (!activeTenant) {
+        status = "needs_tenant_selection";
+      } else {
+        status = "authenticated";
+      }
+      return {
+        status,
+        user: user ? { id: user.id, email: user.email } : null,
+        tenants,
+        activeTenant
+      };
+    }
+    
+    case 'api_call': {
+      const { method, path, body } = args;
+      if (method === 'POST' && path === '/v1/auth/login') {
+        const { email, password } = body;
+        const user = mockUsers.find(u => u.email === email);
+        if (!user || user.password !== password) {
+          throw "IAM_ERR_INVALID_CREDENTIALS";
+        }
+        const userTnts = mockUserTenants.filter(ut => ut.user_id === user.id);
+        const tenants = userTnts.map(ut => {
+          const t = mockTenants.find(tnt => tnt.id === ut.tenant_id);
+          return {
+            id: t.id,
+            code: t.code,
+            name: t.name,
+            role: ut.role
+          };
+        });
+        mockSessions = {
+          token: `mock-token-${user.id}`,
+          user_id: user.id,
+          active_tenant_id: tenants[0]?.id || null
+        };
+        return {
+          user: { id: user.id, email: user.email },
+          tenants
+        };
+      }
+      if (method === 'POST' && path === '/v1/auth/register-tenant') {
+        const { tenant_name, company_name, admin_email, admin_password, tenant_code } = body;
+        if (admin_password.length < 8) {
+          throw "IAM_ERR_WEAK_PASSWORD";
+        }
+        if (mockUsers.some(u => u.email === admin_email)) {
+          throw "IAM_ERR_EMAIL_TAKEN";
+        }
+        const user_id = `usr_${Date.now()}`;
+        const tenant_id = `tnt_${Date.now()}`;
+        mockUsers.push({ id: user_id, email: admin_email, password: admin_password });
+        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name });
+        mockUserTenants.push({ user_id, tenant_id, role: "admin" });
+        mockSessions = {
+          token: `mock-token-${user_id}`,
+          user_id,
+          active_tenant_id: tenant_id
+        };
+        return {
+          user: { id: user_id, email: admin_email },
+          tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
+        };
+      }
+      throw `Mock API endpoint not found: ${method} ${path}`;
+    }
+    
+    case 'logout': {
+      mockSessions = null;
       return null;
     }
     

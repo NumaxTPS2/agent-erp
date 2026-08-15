@@ -12,15 +12,29 @@
     fetchModulesGallery,
     installModuleAction,
     uninstallModuleAction,
-    navigate
+    navigate,
+    checkAuthStatus,
+    logoutAction
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import MutationDialog from './lib/components/MutationDialog.svelte';
+  import LoginScreen from './lib/components/auth/LoginScreen.svelte';
+  import RegisterWizard from './lib/components/auth/RegisterWizard.svelte';
 
   let activeTab = $derived(appState.activeWorkspace);
   let activeOrderFilter = $state('all');
   let selectedOrderId = $state(null);
   let isNotificationOpen = $state(false);
+  let isInitialized = $state(false);
+
+  async function initializeAppData() {
+    if (isInitialized) return;
+    await fetchOrders();
+    await fetchAuditLogs();
+    await fetchInstalledModules();
+    await fetchModulesGallery();
+    isInitialized = true;
+  }
 
   // Initialize data on mount
   onMount(async () => {
@@ -35,23 +49,48 @@
       appState.version = '0.1.0';
     }
 
-    await fetchOrders();
-    await fetchAuditLogs();
-    await fetchInstalledModules();
-    await fetchModulesGallery();
+    // Check auth status first
+    const auth = await checkAuthStatus();
+
+    if (auth.status === 'unauthenticated') {
+      if (appState.route !== '/register') {
+        navigate('/login');
+      }
+    } else if (auth.status === 'needs_tenant_creation') {
+      navigate('/onboarding');
+    } else if (auth.status === 'needs_tenant_selection') {
+      navigate('/select-tenant');
+    } else {
+      // Authenticated
+      if (appState.route === '/login' || appState.route === '/register') {
+        navigate('/app/sales');
+      }
+      await initializeAppData();
+    }
 
     // Hash router synchronization
-    const handleHashChange = () => {
+    const handleHashChange = async () => {
       const hash = location.hash.slice(1);
       if (!hash) {
-        navigate('/app/sales');
+        if (appState.authStatus === 'authenticated') {
+          navigate('/app/sales');
+        } else {
+          navigate('/login');
+        }
       } else {
-        appState.route = hash;
+        if (appState.authStatus === 'unauthenticated' && hash !== '/register') {
+          navigate('/login');
+        } else {
+          appState.route = hash;
+          if (appState.authStatus === 'authenticated') {
+            await initializeAppData();
+          }
+        }
       }
     };
     window.addEventListener('hashchange', handleHashChange);
     // Initial sync
-    handleHashChange();
+    await handleHashChange();
 
     // Automatically listen to the background notification event from Rust
     const unlisten = await listen('notification-hub', (event) => {
@@ -75,7 +114,9 @@
       }
 
       // Refresh orders in real-time
-      fetchOrders();
+      if (appState.authStatus === 'authenticated') {
+        fetchOrders();
+      }
     });
 
     // Request notification permission early
@@ -130,23 +171,15 @@
 </script>
 
 {#if appState.route === '/login'}
-  <div class="auth-placeholder">
-    <!-- TODO: Implement Login view in #28 -->
-    <h2>Login Page (Placeholder)</h2>
-  </div>
+  <LoginScreen />
 {:else if appState.route === '/register'}
-  <div class="auth-placeholder">
-    <!-- TODO: Implement Register view in #29 -->
-    <h2>Register Page (Placeholder)</h2>
-  </div>
+  <RegisterWizard />
 {:else if appState.route === '/onboarding'}
   <div class="auth-placeholder">
-    <!-- TODO: Implement Onboarding view in #29 -->
     <h2>Onboarding Page (Placeholder)</h2>
   </div>
 {:else if appState.route === '/select-tenant'}
   <div class="auth-placeholder">
-    <!-- TODO: Implement Select Tenant view in #39 -->
     <h2>Select Tenant Page (Placeholder)</h2>
   </div>
 {:else}
@@ -203,6 +236,20 @@
     </div>
 
     <div class="sidebar-footer">
+      {#if appState.authUser}
+        <div class="user-profile-section">
+          <div class="user-avatar">
+            {appState.authUser.email[0].toUpperCase()}
+          </div>
+          <div class="user-info">
+            <span class="user-email">{appState.authUser.email}</span>
+            <span class="tenant-tag">{appState.activeTenant?.name || '無租戶'}</span>
+          </div>
+          <button class="logout-btn" onclick={logoutAction} title="登出">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          </button>
+        </div>
+      {/if}
       <button class="btn btn-primary" onclick={checkForUpdates}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
         <span>檢查主程式更新</span>
@@ -558,6 +605,73 @@
 {/if}
 
 <style>
+  /* User profile section in sidebar */
+  .user-profile-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: 12px;
+    width: 100%;
+  }
+
+  .user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgb(34, 211, 238) 0%, rgb(168, 85, 247) 100%);
+    color: #0F0F12;
+    font-weight: 700;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+  }
+
+  .user-info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-grow: 1;
+    text-align: left;
+  }
+
+  .user-email {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    font-weight: 500;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
+  .tenant-tag {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .logout-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all var(--transition-fast);
+  }
+
+  .logout-btn:hover {
+    color: rgb(248, 113, 113);
+    background: rgba(239, 68, 68, 0.1);
+  }
+
   /* Local layout classes */
   .workspace-header {
     display: flex;
