@@ -411,27 +411,37 @@ export async function checkAuthStatus() {
   }
 }
 
+// Generic API Call helper that handles token expiration globally
+export async function apiCall(method, path, body = {}) {
+  try {
+    return await invoke('api_call', { method, path, body });
+  } catch (err) {
+    const errMsg = err?.message || err || '';
+    if (path !== '/v1/auth/login' && (errMsg === 'IAM_ERR_INVALID_CREDENTIALS' || errMsg.toString().includes('401') || errMsg.toString().includes('UNAUTHENTICATED'))) {
+      showToast('登入已過期');
+      appState.authStatus = 'unauthenticated';
+      appState.authUser = null;
+      appState.authTenants = [];
+      appState.activeTenant = null;
+      navigate('/login');
+    }
+    throw err;
+  }
+}
+
 export async function login(email, password) {
-  const res = await invoke('api_call', {
-    method: 'POST',
-    path: '/v1/auth/login',
-    body: { email, password, client_type: 'app' }
-  });
+  const res = await apiCall('POST', '/v1/auth/login', { email, password, client_type: 'app' });
   await checkAuthStatus();
   return res;
 }
 
 export async function registerTenant(tenantName, companyName, adminEmail, adminPassword, tenantCode) {
-  const res = await invoke('api_call', {
-    method: 'POST',
-    path: '/v1/auth/register-tenant',
-    body: {
-      tenant_name: tenantName,
-      company_name: companyName,
-      admin_email: adminEmail,
-      admin_password: adminPassword,
-      tenant_code: tenantCode
-    }
+  const res = await apiCall('POST', '/v1/auth/register-tenant', {
+    tenant_name: tenantName,
+    company_name: companyName,
+    admin_email: adminEmail,
+    admin_password: adminPassword,
+    tenant_code: tenantCode
   });
   await checkAuthStatus();
   return res;
@@ -439,9 +449,9 @@ export async function registerTenant(tenantName, companyName, adminEmail, adminP
 
 export async function logoutAction() {
   try {
-    await invoke('logout');
+    await apiCall('POST', '/v1/auth/logout', {});
   } catch (err) {
-    console.error("Failed to call logout command:", err);
+    console.error("Failed to call logout API:", err);
   }
   appState.authStatus = 'unauthenticated';
   appState.authUser = null;
@@ -451,27 +461,27 @@ export async function logoutAction() {
 }
 
 export async function selectTenantAction(tenantId) {
-  const res = await invoke('api_call', {
-    method: 'POST',
-    path: '/v1/auth/select-tenant',
-    body: { tenant_id: tenantId }
-  });
+  const res = await apiCall('POST', '/v1/auth/select-tenant', { tenant_id: tenantId });
   await checkAuthStatus();
   return res;
 }
 
 export async function createTenantAction(tenantName, companyName, tenantCode, taxId) {
-  const res = await invoke('api_call', {
-    method: 'POST',
-    path: '/v1/auth/create-tenant',
-    body: {
-      tenant_name: tenantName,
-      company_name: companyName,
-      tenant_code: tenantCode,
-      tax_id: taxId
-    }
+  const res = await apiCall('POST', '/v1/auth/create-tenant', {
+    tenant_name: tenantName,
+    company_name: companyName,
+    tenant_code: tenantCode,
+    tax_id: taxId
   });
   await checkAuthStatus();
   return res;
+}
+
+export async function simulateTokenExpiry() {
+  try {
+    await apiCall('POST', '/v1/test/expire', {});
+  } catch (err) {
+    console.log("Token expiration simulated successfully:", err);
+  }
 }
 

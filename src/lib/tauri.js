@@ -348,6 +348,13 @@ export async function invoke(cmd, args = {}) {
           company_id: `cmp_${Date.now()}`
         };
       }
+      if (method === 'POST' && path === '/v1/auth/logout') {
+        mockSessions = null;
+        return {};
+      }
+      if (method === 'POST' && path === '/v1/test/expire') {
+        throw "IAM_ERR_INVALID_CREDENTIALS";
+      }
       throw `Mock API endpoint not found: ${method} ${path}`;
     }
     

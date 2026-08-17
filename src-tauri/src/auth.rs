@@ -93,7 +93,7 @@ async fn call_real_tps2(
     let client = reqwest::Client::new();
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
-    let req = match method {
+    let mut req = match method {
         "GET" => client.get(&url),
         "POST" => client.post(&url).json(body),
         "PUT" => client.put(&url).json(body),
@@ -101,26 +101,40 @@ async fn call_real_tps2(
         _ => return Err(format!("auth: Unsupported HTTP method: {}", method)),
     };
 
+    if let Ok(token) = get_secure_token("access_token") {
+        req = req.bearer_auth(token);
+    }
+
     let res = req
         .send()
         .await
         .map_err(|e| format!("auth: HTTP request failed: {}", e))?;
 
     let status = res.status();
-    let json_res: Value = res
-        .json()
+    let text = res
+        .text()
         .await
-        .map_err(|e| format!("auth: Failed to parse JSON response: {}", e))?;
+        .map_err(|e| format!("auth: Failed to read response body: {}", e))?;
+
+    let json_res: Option<Value> = serde_json::from_str(&text).ok();
 
     if !status.is_success() {
         let err_reason = json_res
-            .get("reason")
+            .as_ref()
+            .and_then(|v| v.get("reason"))
             .and_then(|v| v.as_str())
-            .unwrap_or("UNKNOWN_ERROR");
+            .unwrap_or_else(|| {
+                if status == reqwest::StatusCode::UNAUTHORIZED {
+                    "IAM_ERR_INVALID_CREDENTIALS"
+                } else {
+                    "UNKNOWN_ERROR"
+                }
+            });
         return Err(err_reason.to_string());
     }
 
-    Ok(json_res)
+    let json_val = json_res.ok_or_else(|| "auth: Empty or invalid JSON response".to_string())?;
+    Ok(json_val)
 }
 
 // Local mock dispatch handling
@@ -443,6 +457,15 @@ async fn mock_dispatch<R: tauri::Runtime>(
             }))
         }
 
+        ("POST", "/v1/auth/logout") => {
+            if let Ok(token) = get_secure_token("access_token") {
+                let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&token]);
+            }
+            Ok(json!({}))
+        }
+
+        ("POST", "/v1/test/expire") => Err("IAM_ERR_INVALID_CREDENTIALS".to_string()),
+
         _ => Err(format!(
             "auth: Mock endpoint not implemented: {} {}",
             method, path
@@ -459,26 +482,38 @@ pub async fn api_call<R: tauri::Runtime>(
 ) -> Result<Value, String> {
     let base_url = env::var("TPS2_BASE_URL").ok();
 
-    let mut response_val = match base_url {
-        Some(url) => call_real_tps2(&url, &method, &path, &body).await?,
-        None => mock_dispatch(&app_handle, &method, &path, &body).await?,
+    let response_result = match base_url {
+        Some(url) => call_real_tps2(&url, &method, &path, &body).await,
+        None => mock_dispatch(&app_handle, &method, &path, &body).await,
     };
 
-    // Extract access and refresh tokens, securely store them, and delete them from the payload returned to Svelte/JS.
-    if let Some(obj) = response_val.as_object_mut() {
-        if let Some(access_token_val) = obj.remove("access_token") {
-            if let Some(access_token) = access_token_val.as_str() {
-                set_secure_token("access_token", access_token)?;
+    match response_result {
+        Ok(mut response_val) => {
+            if path == "/v1/auth/logout" {
+                let _ = delete_secure_token("access_token");
+                let _ = delete_secure_token("refresh_token");
+            } else if let Some(obj) = response_val.as_object_mut() {
+                if let Some(access_token_val) = obj.remove("access_token") {
+                    if let Some(access_token) = access_token_val.as_str() {
+                        set_secure_token("access_token", access_token)?;
+                    }
+                }
+                if let Some(refresh_token_val) = obj.remove("refresh_token") {
+                    if let Some(refresh_token) = refresh_token_val.as_str() {
+                        set_secure_token("refresh_token", refresh_token)?;
+                    }
+                }
             }
+            Ok(response_val)
         }
-        if let Some(refresh_token_val) = obj.remove("refresh_token") {
-            if let Some(refresh_token) = refresh_token_val.as_str() {
-                set_secure_token("refresh_token", refresh_token)?;
+        Err(err) => {
+            if path != "/v1/auth/login" && err == "IAM_ERR_INVALID_CREDENTIALS" {
+                let _ = delete_secure_token("access_token");
+                let _ = delete_secure_token("refresh_token");
             }
+            Err(err)
         }
     }
-
-    Ok(response_val)
 }
 
 #[tauri::command]
@@ -1140,5 +1175,129 @@ mod tests {
 
         assert!(res.is_err());
         assert_eq!(res.unwrap_err(), "IAM_ERR_TENANT_CODE_TAKEN");
+    }
+
+    #[test]
+    fn test_keychain_save_get_clear_roundtrip() {
+        // Given: test key and password
+        let key = "test_key";
+        let password = "test_password_value";
+
+        let _ = delete_secure_token(key);
+
+        // When: saving the password
+        set_secure_token(key, password).unwrap();
+
+        // Then: we should retrieve the same password
+        let retrieved = get_secure_token(key).unwrap();
+        assert_eq!(retrieved, password);
+
+        // When: deleting the password
+        delete_secure_token(key).unwrap();
+
+        // Then: retrieving it should fail
+        assert!(get_secure_token(key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_api_call_logout_success() {
+        // Given: setup test database with a user and active session
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-u1', 'u1', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+        set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
+
+        // When: calling api_call with logout path
+        let res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/auth/logout".to_string(),
+            json!({}),
+        )
+        .await;
+
+        // Then: the api_call should succeed
+        assert!(res.is_ok());
+
+        // And: the session should be deleted from SQLite
+        let mut stmt = conn
+            .prepare("SELECT count(*) FROM sessions WHERE token = 'mock-token-u1'")
+            .unwrap();
+        let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0);
+
+        // And: Keychain tokens should be deleted
+        assert!(get_secure_token("access_token").is_err());
+        assert!(get_secure_token("refresh_token").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_api_call_expired_token_clears_keychain() {
+        // Given: mock token stored in Keychain
+        let handle = setup_test_db();
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+        set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
+
+        // When: calling api_call with an endpoint that returns invalid credentials (using our test expire endpoint)
+        let res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/test/expire".to_string(),
+            json!({}),
+        )
+        .await;
+
+        // Then: the api_call should return IAM_ERR_INVALID_CREDENTIALS error
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "IAM_ERR_INVALID_CREDENTIALS");
+
+        // And: Keychain tokens should be automatically cleared
+        assert!(get_secure_token("access_token").is_err());
+        assert!(get_secure_token("refresh_token").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_api_call_login_failure_does_not_clear_keychain() {
+        // Given: setup test database, seed previous active token
+        let handle = setup_test_db();
+        set_secure_token("access_token", "mock-token-prev").unwrap();
+        set_secure_token("refresh_token", "mock-refresh-prev").unwrap();
+
+        // When: login fails with invalid credentials
+        let res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/auth/login".to_string(),
+            json!({
+                "email": "test@example.com",
+                "password": "wrong_password"
+            }),
+        )
+        .await;
+
+        // Then: api_call should return IAM_ERR_INVALID_CREDENTIALS error
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "IAM_ERR_INVALID_CREDENTIALS");
+
+        // And: the previous token should STILL exist (not cleared)
+        assert_eq!(get_secure_token("access_token").unwrap(), "mock-token-prev");
+        assert_eq!(
+            get_secure_token("refresh_token").unwrap(),
+            "mock-refresh-prev"
+        );
     }
 }
