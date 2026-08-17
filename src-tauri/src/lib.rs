@@ -115,11 +115,15 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
             id TEXT PRIMARY KEY,
             code TEXT NOT NULL UNIQUE,
             name TEXT NOT NULL,
-            company_name TEXT NOT NULL
+            company_name TEXT NOT NULL,
+            tax_id TEXT
         )",
         [],
     )
     .map_err(|e| format!("Failed to create tenants table: {}", e))?;
+
+    // Migration to add tax_id column to tenants if it does not exist
+    let _ = conn.execute("ALTER TABLE tenants ADD COLUMN tax_id TEXT", []);
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_tenants (

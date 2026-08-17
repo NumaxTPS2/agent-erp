@@ -365,6 +365,84 @@ async fn mock_dispatch<R: tauri::Runtime>(
             }))
         }
 
+        ("POST", "/v1/auth/create-tenant") => {
+            let tenant_name = body
+                .get("tenant_name")
+                .and_then(|v| v.as_str())
+                .ok_or("auth: Missing tenant_name parameter")?;
+            let company_name = body
+                .get("company_name")
+                .and_then(|v| v.as_str())
+                .ok_or("auth: Missing company_name parameter")?;
+            let tenant_code = body
+                .get("tenant_code")
+                .and_then(|v| v.as_str())
+                .ok_or("auth: Missing tenant_code parameter")?;
+            let tax_id = body.get("tax_id").and_then(|v| v.as_str());
+
+            let token = get_secure_token("access_token")?;
+
+            // Retrieve user from current session
+            let mut stmt = conn
+                .prepare("SELECT user_id FROM sessions WHERE token = ?1")
+                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+            let user_id: String = stmt
+                .query_row([&token], |row| row.get(0))
+                .map_err(|_| "auth: Session not found or invalid token".to_string())?;
+
+            // Retrieve user email
+            let mut stmt_user = conn
+                .prepare("SELECT email FROM users WHERE id = ?1")
+                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+            let email: String = stmt_user
+                .query_row([&user_id], |row| row.get(0))
+                .map_err(|_| "auth: User record missing".to_string())?;
+
+            // Check if tenant_code is already taken
+            let mut stmt_check = conn
+                .prepare("SELECT count(*) FROM tenants WHERE code = ?1")
+                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+            let count: i64 = stmt_check
+                .query_row([tenant_code], |row| row.get(0))
+                .unwrap_or(0);
+            if count > 0 {
+                return Err("IAM_ERR_TENANT_CODE_TAKEN".to_string());
+            }
+
+            let tenant_id = format!("tnt_{}", uuid_like_id());
+
+            // Save tenant
+            conn.execute(
+                "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (&tenant_id, tenant_code, tenant_name, company_name, tax_id),
+            )
+            .map_err(|e| format!("auth: Failed to create tenant: {}", e))?;
+
+            // Save user tenant relation (owner/admin)
+            conn.execute(
+                "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
+                (&user_id, &tenant_id, "admin"),
+            )
+            .map_err(|e| format!("auth: Failed to create user tenant relation: {}", e))?;
+
+            // Update session with new active tenant and a new scoped token
+            let new_token = format!("mock-scoped-token-{}", user_id);
+            conn.execute(
+                "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
+                (&new_token, &tenant_id, &token),
+            )
+            .map_err(|e| format!("auth: Failed to update session token: {}", e))?;
+
+            Ok(json!({
+                "access_token": new_token,
+                "refresh_token": format!("mock-refresh-{}", user_id),
+                "user_id": user_id,
+                "email": email,
+                "tenant_id": tenant_id,
+                "company_id": format!("cmp_{}", uuid_like_id())
+            }))
+        }
+
         _ => Err(format!(
             "auth: Mock endpoint not implemented: {} {}",
             method, path
@@ -560,7 +638,8 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 code TEXT NOT NULL UNIQUE,
                 name TEXT NOT NULL,
-                company_name TEXT NOT NULL
+                company_name TEXT NOT NULL,
+                tax_id TEXT
             )",
             [],
         )
@@ -950,5 +1029,116 @@ mod tests {
             status_val.get("tenants").unwrap().as_array().unwrap().len(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn test_create_tenant_success() {
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        // Seed user and active session without active_tenant_id
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-u1', 'u1', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+
+        let req_body = json!({
+            "tenant_name": "New Tenant",
+            "company_name": "New Company",
+            "tenant_code": "new_tnt",
+            "tax_id": "12345678"
+        });
+
+        let res = api_call(
+            handle.clone(),
+            "POST".to_string(),
+            "/v1/auth/create-tenant".to_string(),
+            req_body,
+        )
+        .await;
+
+        assert!(res.is_ok());
+        let res_val = res.unwrap();
+        assert_eq!(res_val.get("user_id").unwrap().as_str().unwrap(), "u1");
+        assert_eq!(
+            res_val.get("email").unwrap().as_str().unwrap(),
+            "test@example.com"
+        );
+        assert!(res_val.get("tenant_id").is_some());
+        assert!(res_val.get("company_id").is_some());
+
+        // Verify session was updated to the new scoped token and has active_tenant_id set
+        let active_token = get_secure_token("access_token").unwrap();
+        assert_eq!(active_token, "mock-scoped-token-u1");
+
+        // Verify status is authenticated
+        let status_res = get_auth_status(handle).await.unwrap();
+        assert_eq!(
+            status_res.get("status").unwrap().as_str().unwrap(),
+            "authenticated"
+        );
+        assert_eq!(
+            status_res
+                .get("activeTenant")
+                .unwrap()
+                .get("code")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "new_tnt"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_tenant_duplicate_code() {
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        // Seed user, existing tenant with same code, and active session
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES ('tnt_existing', 'dup_tnt', 'Existing', 'Existing Corp', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-u1', 'u1', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-u1").unwrap();
+
+        let req_body = json!({
+            "tenant_name": "New Tenant",
+            "company_name": "New Company",
+            "tenant_code": "dup_tnt",
+            "tax_id": ""
+        });
+
+        let res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/auth/create-tenant".to_string(),
+            req_body,
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err(), "IAM_ERR_TENANT_CODE_TAKEN");
     }
 }

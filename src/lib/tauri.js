@@ -21,7 +21,8 @@ let mockInstalledModules = [];
 
 // Local mock database for user authentication
 let mockUsers = [
-  { id: "usr_mock_peter", email: "peter@example.com", password: "password123" }
+  { id: "usr_mock_peter", email: "peter@example.com", password: "password123" },
+  { id: "usr_mock_new", email: "new@example.com", password: "password123" }
 ];
 let mockTenants = [
   { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." },
@@ -318,6 +319,33 @@ export async function invoke(cmd, args = {}) {
           access_token: new_token,
           refresh_token: `mock-refresh-${mockSessions.user_id}`,
           status: "authenticated"
+        };
+      }
+      if (method === 'POST' && path === '/v1/auth/create-tenant') {
+        const { tenant_name, company_name, tenant_code, tax_id } = body;
+        if (!mockSessions) {
+          throw "auth: Session not found";
+        }
+        if (mockTenants.some(t => t.code === tenant_code)) {
+          throw "IAM_ERR_TENANT_CODE_TAKEN";
+        }
+        const tenant_id = `tnt_${Date.now()}`;
+        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name, tax_id });
+        mockUserTenants.push({ user_id: mockSessions.user_id, tenant_id, role: "admin" });
+        mockSessions.active_tenant_id = tenant_id;
+
+        // Generate new mock scoped token
+        const new_token = `mock-scoped-token-${mockSessions.user_id}`;
+        mockSessions.token = new_token;
+
+        const user = mockUsers.find(u => u.id === mockSessions.user_id);
+        return {
+          access_token: new_token,
+          refresh_token: `mock-refresh-${mockSessions.user_id}`,
+          user_id: mockSessions.user_id,
+          email: user?.email || '',
+          tenant_id,
+          company_id: `cmp_${Date.now()}`
         };
       }
       throw `Mock API endpoint not found: ${method} ${path}`;

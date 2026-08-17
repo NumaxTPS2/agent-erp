@@ -460,3 +460,18 @@ export async function selectTenantAction(tenantId) {
   return res;
 }
 
+export async function createTenantAction(tenantName, companyName, tenantCode, taxId) {
+  const res = await invoke('api_call', {
+    method: 'POST',
+    path: '/v1/auth/create-tenant',
+    body: {
+      tenant_name: tenantName,
+      company_name: companyName,
+      tenant_code: tenantCode,
+      tax_id: taxId
+    }
+  });
+  await checkAuthStatus();
+  return res;
+}
+
