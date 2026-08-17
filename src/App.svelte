@@ -21,6 +21,7 @@
   import LoginScreen from './lib/components/auth/LoginScreen.svelte';
   import RegisterWizard from './lib/components/auth/RegisterWizard.svelte';
   import TenantPicker from './lib/components/auth/TenantPicker.svelte';
+  import OnboardingScreen from './lib/components/auth/OnboardingScreen.svelte';
 
   let activeTab = $derived(appState.activeWorkspace);
   let activeOrderFilter = $state('all');
@@ -176,9 +177,7 @@
 {:else if appState.route === '/register'}
   <RegisterWizard />
 {:else if appState.route === '/onboarding'}
-  <div class="auth-placeholder">
-    <h2>Onboarding Page (Placeholder)</h2>
-  </div>
+  <OnboardingScreen />
 {:else if appState.route === '/select-tenant'}
   <TenantPicker />
 {:else}
