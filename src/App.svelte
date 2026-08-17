@@ -14,7 +14,8 @@
     uninstallModuleAction,
     navigate,
     checkAuthStatus,
-    logoutAction
+    logoutAction,
+    simulateTokenExpiry
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import MutationDialog from './lib/components/MutationDialog.svelte';
@@ -546,6 +547,47 @@
                 {/if}
               </div>
             </div>
+
+            <!-- 系統認證與帳戶 -->
+            <div class="settings-group glass-panel">
+              <h3>系統認證與帳戶 (System Authentication & Account)</h3>
+              <p class="settings-desc">管理目前本機工作站的認證階段。當前登入身分與租戶資訊如下：</p>
+              
+              <div class="settings-status-box" style="margin-top: 16px; padding: 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);">
+                <div style="margin-bottom: 8px;">
+                  <span style="color: var(--text-muted); font-size: 0.85rem;">目前帳戶：</span>
+                  <span style="color: var(--text-primary); font-weight: 600; font-size: 0.9rem;">{appState.authUser?.email || '未登入'}</span>
+                </div>
+                <div>
+                  <span style="color: var(--text-muted); font-size: 0.85rem;">活動租戶：</span>
+                  {#if appState.activeTenant}
+                    <span class="tenant-tag" style="background: rgba(var(--accent-rgb), 0.1); color: var(--accent); border: 1px solid rgba(var(--accent-rgb), 0.2); padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 500;">
+                      {appState.activeTenant.name} ({appState.activeTenant.code})
+                    </span>
+                  {:else}
+                    <span style="color: var(--text-muted); font-size: 0.85rem; font-style: italic;">未選取租戶</span>
+                  {/if}
+                </div>
+              </div>
+              
+              <div style="display: flex; gap: 12px; margin-top: 16px;">
+                <button 
+                  class="btn" 
+                  style="padding: 8px 16px; font-size: 0.9rem; border-color: rgba(239, 68, 68, 0.3); color: rgb(239, 68, 68); background: rgba(239, 68, 68, 0.05);"
+                  onclick={logoutAction}
+                >
+                  安全登出帳戶
+                </button>
+                <button 
+                  class="btn" 
+                  style="padding: 8px 16px; font-size: 0.9rem; border-color: rgba(245, 158, 11, 0.3); color: rgb(245, 158, 11); background: rgba(245, 158, 11, 0.05);"
+                  onclick={simulateTokenExpiry}
+                >
+                  模擬 Token 過期
+                </button>
+              </div>
+            </div>
+
           </div>
         </div>
 
