@@ -21,7 +21,7 @@ let mockInstalledModules = [];
 
 // Local mock database for user authentication
 let mockUsers = [
-  { id: "usr_mock_peter", email: "peter@example.com", password: "password123" },
+  { id: "usr_mock_admin", email: "admin@example.com", password: "password123" },
   { id: "usr_mock_new", email: "new@example.com", password: "password123" }
 ];
 let mockTenants = [
@@ -29,8 +29,8 @@ let mockTenants = [
   { id: "tnt_mock_2", code: "alpha", name: "Alpha Corporation", company_name: "Alpha Corp." }
 ];
 let mockUserTenants = [
-  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_1", role: "admin" },
-  { user_id: "usr_mock_peter", tenant_id: "tnt_mock_2", role: "member" }
+  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_1", role: "admin" },
+  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_2", role: "member" }
 ];
 let mockSessions = null; // { token, user_id, active_tenant_id }
 
@@ -130,7 +130,7 @@ export async function invoke(cmd, args = {}) {
         const payload = {
           id: "SO-9922",
           title: "A 公司採購單已送入",
-          message: "系統已建立孿生訂單 SO-9922，等待 Peter 審核。",
+          message: "系統已建立孿生訂單 SO-9922，等待安全確認。",
           workspace: "sales"
         };
         
@@ -143,7 +143,7 @@ export async function invoke(cmd, args = {}) {
     }
     
     case 'confirm_mutation': {
-      const { mutationId, approved } = args;
+      const { mutationId, approved, operator } = args;
       const status = approved ? "approved" : "rejected";
       
       mockOrders = mockOrders.map(o => o.so_id === mutationId ? { ...o, status } : o);
@@ -154,7 +154,7 @@ export async function invoke(cmd, args = {}) {
         action_type: "confirm_order",
         arguments: { so_id: mutationId },
         decision: status,
-        operator: "Peter",
+        operator: operator || "Unknown",
         timestamp
       });
       return null;

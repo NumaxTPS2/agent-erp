@@ -271,7 +271,7 @@ async fn simulate_agent_chat(
         let response_text = match workspace.as_str() {
             "finance" => "Finance BI Dashboard Analyzed:\n- Current gross margin is 25.4%.\n- Target is 25.0%.\n- Recommendation: Approve Customer A's PO-2026-0092 to leverage idle capacity and hit Q3 goals.",
             "crm" => "Customer CRM Profiler:\n- Customer A has a credit rating of AAA.\n- Past ledger defaults: None.\n- Delivery success rate: 100%.\n- Recommendation: Proceed to process the order immediately.",
-            _ => "Sales Workspace Context Loaded:\n- Product: AI Core Chip.\n- Mirrored Draft: SO-9922.\n- Current Action Required: Request Peter's authorization to execute database writes and sync invoice."
+            _ => "Sales Workspace Context Loaded:\n- Product: AI Core Chip.\n- Mirrored Draft: SO-9922.\n- Current Action Required: Request operator's authorization to execute database writes and sync invoice."
         };
 
         // Split text by space and stream back
@@ -325,7 +325,7 @@ async fn simulate_webhook_order(app_handle: AppHandle) -> Result<(), String> {
             serde_json::json!({
                 "id": "SO-9922",
                 "title": "A 公司採購單已送入",
-                "message": "系統已建立孿生訂單 SO-9922，等待 Peter 審核。",
+                "message": "系統已建立孿生訂單 SO-9922，等待安全確認。",
                 "workspace": "sales"
             }),
         );
@@ -341,6 +341,7 @@ async fn confirm_mutation(
     app_handle: AppHandle,
     mutation_id: String,
     approved: bool,
+    operator: String,
 ) -> Result<(), String> {
     let db_path = get_db_path(&app_handle);
     let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
@@ -369,7 +370,7 @@ async fn confirm_mutation(
             "confirm_order",
             format!(r#"{{"so_id": "{}"}}"#, mutation_id),
             status,
-            "Peter",
+            &operator,
             timestamp,
         ),
     )

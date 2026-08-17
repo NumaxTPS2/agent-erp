@@ -240,7 +240,7 @@ pub_fn("approveMutation");
 export async function approveMutation(id) {
   if (!appState.pendingMutation) return;
   try {
-    await invoke('confirm_mutation', { mutationId: id, approved: true });
+    await invoke('confirm_mutation', { mutationId: id, approved: true, operator: appState.authUser?.email || 'Unknown' });
     appState.pendingMutation = null;
     await fetchOrders();
     await fetchAuditLogs();
@@ -259,14 +259,14 @@ pub_fn("rejectMutation");
 export async function rejectMutation(id) {
   if (!appState.pendingMutation) return;
   try {
-    await invoke('confirm_mutation', { mutationId: id, approved: false });
+    await invoke('confirm_mutation', { mutationId: id, approved: false, operator: appState.authUser?.email || 'Unknown' });
     appState.pendingMutation = null;
     await fetchOrders();
     await fetchAuditLogs();
     
     appState.chatMessages.push({
       role: 'assistant',
-      content: `已拒絕訂單 ${id} 的核准寫入。該指令已被安全阻斷，審計日誌已記錄 Peter 的拒絕動作。`
+      content: `已拒絕訂單 ${id} 的核准寫入。該指令已被安全阻斷，審計日誌已記錄 ${appState.authUser?.email || '操作者'} 的拒絕動作。`
     });
   } catch (err) {
     console.error("Failed to reject mutation:", err);
