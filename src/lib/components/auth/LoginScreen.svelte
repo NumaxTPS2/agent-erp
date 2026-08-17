@@ -62,7 +62,7 @@
           type="email" 
           id="email" 
           bind:value={email}
-          placeholder="peter@example.com"
+          placeholder="admin@example.com"
           disabled={isLoading}
           required
         />
