@@ -5,6 +5,81 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::time::SystemTime;
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
+pub enum ApiError {
+    #[error("invalid credentials")]
+    InvalidCredentials,
+    #[error("email already taken")]
+    EmailTaken,
+    #[error("weak password")]
+    WeakPassword,
+    #[error("tenant not assigned")]
+    TenantNotAssigned,
+    #[error("tenant code taken")]
+    TenantCodeTaken,
+    #[error("user locked")]
+    UserLocked,
+    #[error("provision failed")]
+    ProvisionFailed,
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+    #[error("keychain error: {0}")]
+    KeychainError(String),
+    #[error("database error: {0}")]
+    DatabaseError(String),
+    #[error("network error: {0}")]
+    NetworkError(String),
+    #[error("unknown error: {0}")]
+    Unknown(String),
+}
+
+impl ApiError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            ApiError::InvalidCredentials => "IAM_ERR_INVALID_CREDENTIALS",
+            ApiError::EmailTaken => "IAM_ERR_EMAIL_TAKEN",
+            ApiError::WeakPassword => "IAM_ERR_WEAK_PASSWORD",
+            ApiError::TenantNotAssigned => "IAM_ERR_TENANT_NOT_ASSIGNED",
+            ApiError::TenantCodeTaken => "IAM_ERR_TENANT_CODE_TAKEN",
+            ApiError::UserLocked => "IAM_ERR_USER_LOCKED",
+            ApiError::ProvisionFailed => "IAM_ERR_PROVISION_FAILED",
+            ApiError::InvalidArgument(_) => "IAM_ERR_INVALID_ARGUMENT",
+            ApiError::KeychainError(_) => "LOCAL_ERR_KEYCHAIN",
+            ApiError::DatabaseError(_) => "LOCAL_ERR_DATABASE",
+            ApiError::NetworkError(_) => "LOCAL_ERR_NETWORK",
+            ApiError::Unknown(_) => "UNKNOWN_ERROR",
+        }
+    }
+
+    pub fn from_reason(reason: &str) -> Self {
+        match reason {
+            "IAM_ERR_INVALID_CREDENTIALS" => ApiError::InvalidCredentials,
+            "IAM_ERR_EMAIL_TAKEN" => ApiError::EmailTaken,
+            "IAM_ERR_WEAK_PASSWORD" => ApiError::WeakPassword,
+            "IAM_ERR_TENANT_NOT_ASSIGNED" => ApiError::TenantNotAssigned,
+            "IAM_ERR_TENANT_CODE_TAKEN" => ApiError::TenantCodeTaken,
+            "IAM_ERR_USER_LOCKED" => ApiError::UserLocked,
+            "IAM_ERR_PROVISION_FAILED" => ApiError::ProvisionFailed,
+            other => ApiError::Unknown(other.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct ApiErrorPayload {
+    pub code: String,
+    pub message: String,
+}
+
+impl From<ApiError> for ApiErrorPayload {
+    fn from(err: ApiError) -> Self {
+        Self {
+            code: err.code().to_string(),
+            message: err.to_string(),
+        }
+    }
+}
+
 fn hash_password(password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
@@ -17,7 +92,7 @@ thread_local! {
     static MOCK_KEYRING: std::sync::Mutex<std::collections::HashMap<String, String>> = std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
-fn set_secure_token(key: &str, token: &str) -> Result<(), String> {
+fn set_secure_token(key: &str, token: &str) -> Result<(), ApiError> {
     #[cfg(test)]
     {
         MOCK_KEYRING.with(|m| {
@@ -28,15 +103,15 @@ fn set_secure_token(key: &str, token: &str) -> Result<(), String> {
     #[cfg(not(test))]
     {
         let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| format!("auth: Keyring init failed: {}", e))?;
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
         entry
             .set_password(token)
-            .map_err(|e| format!("auth: Keyring store failed: {}", e))?;
+            .map_err(|e| ApiError::KeychainError(format!("Keyring store failed: {}", e)))?;
         Ok(())
     }
 }
 
-fn get_secure_token(key: &str) -> Result<String, String> {
+fn get_secure_token(key: &str) -> Result<String, ApiError> {
     #[cfg(test)]
     {
         MOCK_KEYRING.with(|m| {
@@ -44,21 +119,21 @@ fn get_secure_token(key: &str) -> Result<String, String> {
                 .unwrap()
                 .get(key)
                 .cloned()
-                .ok_or_else(|| "auth: Token not found in mock keyring".to_string())
+                .ok_or_else(|| ApiError::KeychainError("Token not found in mock keyring".to_string()))
         })
     }
     #[cfg(not(test))]
     {
         let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| format!("auth: Keyring init failed: {}", e))?;
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
         entry
             .get_password()
-            .map_err(|e| format!("auth: Keyring retrieve failed: {}", e))
+            .map_err(|e| ApiError::KeychainError(format!("Keyring retrieve failed: {}", e)))
     }
 }
 
 #[allow(dead_code)]
-fn delete_secure_token(key: &str) -> Result<(), String> {
+fn delete_secure_token(key: &str) -> Result<(), ApiError> {
     #[cfg(test)]
     {
         MOCK_KEYRING.with(|m| {
@@ -69,7 +144,7 @@ fn delete_secure_token(key: &str) -> Result<(), String> {
     #[cfg(not(test))]
     {
         let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| format!("auth: Keyring init failed: {}", e))?;
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
         let _ = entry.delete_password();
         Ok(())
     }
@@ -89,7 +164,7 @@ async fn call_real_tps2(
     method: &str,
     path: &str,
     body: &Value,
-) -> Result<Value, String> {
+) -> Result<Value, ApiError> {
     let client = reqwest::Client::new();
     let url = format!("{}{}", base_url.trim_end_matches('/'), path);
 
@@ -98,7 +173,12 @@ async fn call_real_tps2(
         "POST" => client.post(&url).json(body),
         "PUT" => client.put(&url).json(body),
         "DELETE" => client.delete(&url),
-        _ => return Err(format!("auth: Unsupported HTTP method: {}", method)),
+        _ => {
+            return Err(ApiError::InvalidArgument(format!(
+                "Unsupported HTTP method: {}",
+                method
+            )))
+        }
     };
 
     if let Ok(token) = get_secure_token("access_token") {
@@ -108,13 +188,13 @@ async fn call_real_tps2(
     let res = req
         .send()
         .await
-        .map_err(|e| format!("auth: HTTP request failed: {}", e))?;
+        .map_err(|e| ApiError::NetworkError(format!("HTTP request failed: {}", e)))?;
 
     let status = res.status();
     let text = res
         .text()
         .await
-        .map_err(|e| format!("auth: Failed to read response body: {}", e))?;
+        .map_err(|e| ApiError::NetworkError(format!("Failed to read response body: {}", e)))?;
 
     let json_res: Option<Value> = serde_json::from_str(&text).ok();
 
@@ -130,10 +210,11 @@ async fn call_real_tps2(
                     "UNKNOWN_ERROR"
                 }
             });
-        return Err(err_reason.to_string());
+        return Err(ApiError::from_reason(err_reason));
     }
 
-    let json_val = json_res.ok_or_else(|| "auth: Empty or invalid JSON response".to_string())?;
+    let json_val = json_res
+        .ok_or_else(|| ApiError::NetworkError("Empty or invalid JSON response".to_string()))?;
     Ok(json_val)
 }
 
@@ -143,26 +224,26 @@ async fn mock_dispatch<R: tauri::Runtime>(
     method: &str,
     path: &str,
     body: &Value,
-) -> Result<Value, String> {
+) -> Result<Value, ApiError> {
     let db_path = crate::get_db_path(app_handle);
     let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("auth: Failed to open SQLite: {}", e))?;
+        .map_err(|e| ApiError::DatabaseError(format!("Failed to open SQLite: {}", e)))?;
 
     match (method, path) {
         ("POST", "/v1/auth/login") => {
             let email = body
                 .get("email")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing email parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing email parameter".to_string()))?;
             let password = body
                 .get("password")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing password parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing password parameter".to_string()))?;
 
             // Retrieve user credentials
             let mut stmt = conn
                 .prepare("SELECT id, email, password FROM users WHERE email = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
 
             let user_res = stmt.query_row([email], |row| {
                 Ok((
@@ -176,7 +257,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 Ok((id, db_email, db_password)) => {
                     let hashed_password = hash_password(password);
                     if db_password != hashed_password {
-                        return Err("IAM_ERR_INVALID_CREDENTIALS".to_string());
+                        return Err(ApiError::InvalidCredentials);
                     }
 
                     // Query user tenants
@@ -186,7 +267,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                          JOIN user_tenants ut ON t.id = ut.tenant_id
                          WHERE ut.user_id = ?1",
                         )
-                        .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                        .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
 
                     let tenant_rows = stmt_tenants
                         .query_map([&id], |row| {
@@ -197,7 +278,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                                 "role": row.get::<_, String>(3)?
                             }))
                         })
-                        .map_err(|e| format!("auth: Query execute failed: {}", e))?;
+                        .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
 
                     let mut tenants = Vec::new();
                     for t in tenant_rows {
@@ -225,7 +306,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                             active_tenant_id,
                             SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs() as i64
                         )
-                    ).map_err(|e| format!("auth: Failed to create session: {}", e))?;
+                    ).map_err(|e| ApiError::DatabaseError(format!("Failed to create session: {}", e)))?;
 
                     Ok(json!({
                         "access_token": mock_token,
@@ -237,7 +318,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                         "tenants": tenants
                     }))
                 }
-                Err(_) => Err("IAM_ERR_INVALID_CREDENTIALS".to_string()),
+                Err(_) => Err(ApiError::InvalidCredentials),
             }
         }
 
@@ -245,35 +326,35 @@ async fn mock_dispatch<R: tauri::Runtime>(
             let tenant_name = body
                 .get("tenant_name")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing tenant_name parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_name parameter".to_string()))?;
             let company_name = body
                 .get("company_name")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing company_name parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing company_name parameter".to_string()))?;
             let admin_email = body
                 .get("admin_email")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing admin_email parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_email parameter".to_string()))?;
             let admin_password = body
                 .get("admin_password")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing admin_password parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_password parameter".to_string()))?;
             let tenant_code = body
                 .get("tenant_code")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing tenant_code parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
 
             if admin_password.len() < 8 {
-                return Err("IAM_ERR_WEAK_PASSWORD".to_string());
+                return Err(ApiError::WeakPassword);
             }
 
             // Check duplicate email
             let mut stmt = conn
                 .prepare("SELECT count(*) FROM users WHERE email = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let count: i64 = stmt.query_row([admin_email], |row| row.get(0)).unwrap_or(0);
             if count > 0 {
-                return Err("IAM_ERR_EMAIL_TAKEN".to_string());
+                return Err(ApiError::EmailTaken);
             }
 
             let user_id = format!("usr_{}", uuid_like_id());
@@ -285,21 +366,21 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 "INSERT INTO users (id, email, password) VALUES (?1, ?2, ?3)",
                 (&user_id, admin_email, &hashed_admin_password),
             )
-            .map_err(|e| format!("auth: Failed to register user: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to register user: {}", e)))?;
 
             // Save tenant
             conn.execute(
                 "INSERT INTO tenants (id, code, name, company_name) VALUES (?1, ?2, ?3, ?4)",
                 (&tenant_id, tenant_code, tenant_name, company_name),
             )
-            .map_err(|e| format!("auth: Failed to create tenant: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to create tenant: {}", e)))?;
 
             // Save relation
             conn.execute(
                 "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
                 (&user_id, &tenant_id, "admin"),
             )
-            .map_err(|e| format!("auth: Failed to create user tenant relation: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e)))?;
 
             // Create session
             let mock_token = format!("mock-token-{}", user_id);
@@ -316,7 +397,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                         .as_secs() as i64,
                 ),
             )
-            .map_err(|e| format!("auth: Failed to create session: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to create session: {}", e)))?;
 
             Ok(json!({
                 "access_token": mock_token,
@@ -340,28 +421,28 @@ async fn mock_dispatch<R: tauri::Runtime>(
             let tenant_id = body
                 .get("tenant_id")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing tenant_id parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_id parameter".to_string()))?;
 
             let token = get_secure_token("access_token")?;
 
             // Retrieve user from current session
             let mut stmt = conn
                 .prepare("SELECT user_id FROM sessions WHERE token = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let user_id: String = stmt
                 .query_row([&token], |row| row.get(0))
-                .map_err(|_| "auth: Session not found or invalid token".to_string())?;
+                .map_err(|_| ApiError::InvalidCredentials)?;
 
             // Verify if user is member of the tenant
             let mut stmt_member = conn
                 .prepare("SELECT count(*) FROM user_tenants WHERE user_id = ?1 AND tenant_id = ?2")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let is_member: i64 = stmt_member
                 .query_row([&user_id, tenant_id], |row| row.get(0))
                 .unwrap_or(0);
 
             if is_member == 0 {
-                return Err("IAM_ERR_TENANT_NOT_ASSIGNED".to_string());
+                return Err(ApiError::TenantNotAssigned);
             }
 
             // Update session active tenant and return a scoped token
@@ -370,7 +451,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
                 (&new_token, tenant_id, &token),
             )
-            .map_err(|e| format!("auth: Failed to update session token: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to update session token: {}", e)))?;
 
             Ok(json!({
                 "access_token": new_token,
@@ -383,15 +464,15 @@ async fn mock_dispatch<R: tauri::Runtime>(
             let tenant_name = body
                 .get("tenant_name")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing tenant_name parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_name parameter".to_string()))?;
             let company_name = body
                 .get("company_name")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing company_name parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing company_name parameter".to_string()))?;
             let tenant_code = body
                 .get("tenant_code")
                 .and_then(|v| v.as_str())
-                .ok_or("auth: Missing tenant_code parameter")?;
+                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
             let tax_id = body.get("tax_id").and_then(|v| v.as_str());
 
             let token = get_secure_token("access_token")?;
@@ -399,28 +480,28 @@ async fn mock_dispatch<R: tauri::Runtime>(
             // Retrieve user from current session
             let mut stmt = conn
                 .prepare("SELECT user_id FROM sessions WHERE token = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let user_id: String = stmt
                 .query_row([&token], |row| row.get(0))
-                .map_err(|_| "auth: Session not found or invalid token".to_string())?;
+                .map_err(|_| ApiError::InvalidCredentials)?;
 
             // Retrieve user email
             let mut stmt_user = conn
                 .prepare("SELECT email FROM users WHERE id = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let email: String = stmt_user
                 .query_row([&user_id], |row| row.get(0))
-                .map_err(|_| "auth: User record missing".to_string())?;
+                .map_err(|_| ApiError::DatabaseError("User record missing".to_string()))?;
 
             // Check if tenant_code is already taken
             let mut stmt_check = conn
                 .prepare("SELECT count(*) FROM tenants WHERE code = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let count: i64 = stmt_check
                 .query_row([tenant_code], |row| row.get(0))
                 .unwrap_or(0);
             if count > 0 {
-                return Err("IAM_ERR_TENANT_CODE_TAKEN".to_string());
+                return Err(ApiError::TenantCodeTaken);
             }
 
             let tenant_id = format!("tnt_{}", uuid_like_id());
@@ -430,14 +511,14 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
                 (&tenant_id, tenant_code, tenant_name, company_name, tax_id),
             )
-            .map_err(|e| format!("auth: Failed to create tenant: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to create tenant: {}", e)))?;
 
             // Save user tenant relation (owner/admin)
             conn.execute(
                 "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
                 (&user_id, &tenant_id, "admin"),
             )
-            .map_err(|e| format!("auth: Failed to create user tenant relation: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e)))?;
 
             // Update session with new active tenant and a new scoped token
             let new_token = format!("mock-scoped-token-{}", user_id);
@@ -445,7 +526,7 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
                 (&new_token, &tenant_id, &token),
             )
-            .map_err(|e| format!("auth: Failed to update session token: {}", e))?;
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to update session token: {}", e)))?;
 
             Ok(json!({
                 "access_token": new_token,
@@ -464,27 +545,26 @@ async fn mock_dispatch<R: tauri::Runtime>(
             Ok(json!({}))
         }
 
-        ("POST", "/v1/test/expire") => Err("IAM_ERR_INVALID_CREDENTIALS".to_string()),
+        ("POST", "/v1/test/expire") => Err(ApiError::InvalidCredentials),
 
-        _ => Err(format!(
-            "auth: Mock endpoint not implemented: {} {}",
+        _ => Err(ApiError::InvalidArgument(format!(
+            "Mock endpoint not implemented: {} {}",
             method, path
-        )),
+        ))),
     }
 }
 
-#[tauri::command]
-pub async fn api_call<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-    method: String,
-    path: String,
-    body: Value,
-) -> Result<Value, String> {
+pub(crate) async fn execute_api_call<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    method: &str,
+    path: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
     let base_url = env::var("TPS2_BASE_URL").ok();
 
     let response_result = match base_url {
-        Some(url) => call_real_tps2(&url, &method, &path, &body).await,
-        None => mock_dispatch(&app_handle, &method, &path, &body).await,
+        Some(url) => call_real_tps2(&url, method, path, body).await,
+        None => mock_dispatch(app_handle, method, path, body).await,
     };
 
     match response_result {
@@ -507,7 +587,7 @@ pub async fn api_call<R: tauri::Runtime>(
             Ok(response_val)
         }
         Err(err) => {
-            if path != "/v1/auth/login" && err == "IAM_ERR_INVALID_CREDENTIALS" {
+            if path != "/v1/auth/login" && err == ApiError::InvalidCredentials {
                 let _ = delete_secure_token("access_token");
                 let _ = delete_secure_token("refresh_token");
             }
@@ -516,10 +596,9 @@ pub async fn api_call<R: tauri::Runtime>(
     }
 }
 
-#[tauri::command]
-pub async fn get_auth_status<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-) -> Result<Value, String> {
+pub(crate) async fn execute_get_auth_status<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> Result<Value, ApiError> {
     let token = match get_secure_token("access_token") {
         Ok(t) => t,
         Err(_) => {
@@ -532,13 +611,13 @@ pub async fn get_auth_status<R: tauri::Runtime>(
         }
     };
 
-    let db_path = crate::get_db_path(&app_handle);
+    let db_path = crate::get_db_path(app_handle);
     let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| format!("auth: Failed to open SQLite: {}", e))?;
+        .map_err(|e| ApiError::DatabaseError(format!("Failed to open SQLite: {}", e)))?;
 
     let mut stmt = conn
         .prepare("SELECT user_id, active_tenant_id FROM sessions WHERE token = ?1")
-        .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+        .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
 
     let session_res = stmt.query_row([&token], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
@@ -548,10 +627,10 @@ pub async fn get_auth_status<R: tauri::Runtime>(
         Ok((user_id, active_tenant_id)) => {
             let mut stmt_user = conn
                 .prepare("SELECT email FROM users WHERE id = ?1")
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
             let email: String = stmt_user
                 .query_row([&user_id], |row| row.get(0))
-                .map_err(|_| "auth: User record missing for session".to_string())?;
+                .map_err(|_| ApiError::DatabaseError("User record missing for session".to_string()))?;
 
             let mut stmt_tenants = conn
                 .prepare(
@@ -559,7 +638,7 @@ pub async fn get_auth_status<R: tauri::Runtime>(
                  JOIN user_tenants ut ON t.id = ut.tenant_id
                  WHERE ut.user_id = ?1",
                 )
-                .map_err(|e| format!("auth: Query prep failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
 
             let tenant_rows = stmt_tenants
                 .query_map([&user_id], |row| {
@@ -570,7 +649,7 @@ pub async fn get_auth_status<R: tauri::Runtime>(
                         "role": row.get::<_, String>(3)?
                     }))
                 })
-                .map_err(|e| format!("auth: Query execute failed: {}", e))?;
+                .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
 
             let mut tenants = Vec::new();
             for t in tenant_rows {
@@ -615,10 +694,11 @@ pub async fn get_auth_status<R: tauri::Runtime>(
     }
 }
 
-#[tauri::command]
-pub async fn logout<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) -> Result<(), String> {
+pub(crate) async fn execute_logout<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> Result<(), ApiError> {
     if let Ok(token) = get_secure_token("access_token") {
-        let db_path = crate::get_db_path(&app_handle);
+        let db_path = crate::get_db_path(app_handle);
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
             let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&token]);
         }
@@ -627,6 +707,36 @@ pub async fn logout<R: tauri::Runtime>(app_handle: tauri::AppHandle<R>) -> Resul
     let _ = delete_secure_token("access_token");
     let _ = delete_secure_token("refresh_token");
     Ok(())
+}
+
+#[tauri::command]
+pub async fn api_call<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    method: String,
+    path: String,
+    body: Value,
+) -> Result<Value, ApiErrorPayload> {
+    execute_api_call(&app_handle, &method, &path, &body)
+        .await
+        .map_err(ApiErrorPayload::from)
+}
+
+#[tauri::command]
+pub async fn get_auth_status<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+) -> Result<Value, ApiErrorPayload> {
+    execute_get_auth_status(&app_handle)
+        .await
+        .map_err(ApiErrorPayload::from)
+}
+
+#[tauri::command]
+pub async fn logout<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
+) -> Result<(), ApiErrorPayload> {
+    execute_logout(&app_handle)
+        .await
+        .map_err(ApiErrorPayload::from)
 }
 
 #[cfg(test)]
@@ -707,6 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_success() {
+        // Given: setup user in test database
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -722,13 +833,16 @@ mod tests {
             "password": "password123"
         });
 
-        let res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/login".to_string(),
-            req_body,
+        // When: user logs in with valid credentials
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/login",
+            &req_body,
         )
         .await;
+
+        // Then: login succeeds
         assert!(res.is_ok());
 
         let res_val = res.unwrap();
@@ -755,6 +869,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_invalid_credentials() {
+        // Given: setup user in test database
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -770,19 +885,40 @@ mod tests {
             "password": "wrong_password"
         });
 
-        let res = api_call(
+        // When: calling internal execute_api_call with wrong password
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/login",
+            &req_body,
+        )
+        .await;
+
+        // Then: returns ApiError::InvalidCredentials enum variant
+        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
+
+        // And When: calling tauri command api_call across IPC boundary
+        let ipc_res = api_call(
             handle,
             "POST".to_string(),
             "/v1/auth/login".to_string(),
             req_body,
         )
         .await;
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_INVALID_CREDENTIALS");
+
+        // Then: returns ApiErrorPayload with IAM_ERR_INVALID_CREDENTIALS
+        assert_eq!(
+            ipc_res.unwrap_err(),
+            ApiErrorPayload {
+                code: "IAM_ERR_INVALID_CREDENTIALS".to_string(),
+                message: "invalid credentials".to_string()
+            }
+        );
     }
 
     #[tokio::test]
     async fn test_register_tenant_success() {
+        // Given: setup fresh test database
         let handle = setup_test_db();
 
         let req_body = json!({
@@ -793,13 +929,16 @@ mod tests {
             "tenant_code": "test_tnt"
         });
 
-        let res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/register-tenant".to_string(),
-            req_body,
+        // When: registering new tenant
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body,
         )
         .await;
+
+        // Then: registration succeeds
         assert!(res.is_ok());
 
         let res_val = res.unwrap();
@@ -831,6 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_tenant_email_taken() {
+        // Given: database with existing email
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -849,19 +989,22 @@ mod tests {
             "tenant_code": "test_tnt"
         });
 
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/register-tenant".to_string(),
-            req_body,
+        // When: registering with duplicate email
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body,
         )
         .await;
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_EMAIL_TAKEN");
+
+        // Then: returns ApiError::EmailTaken
+        assert_eq!(res.unwrap_err(), ApiError::EmailTaken);
     }
 
     #[tokio::test]
     async fn test_register_tenant_weak_password() {
+        // Given: fresh database
         let handle = setup_test_db();
 
         let req_body = json!({
@@ -872,19 +1015,22 @@ mod tests {
             "tenant_code": "test_tnt"
         });
 
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/register-tenant".to_string(),
-            req_body,
+        // When: registering with weak password
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body,
         )
         .await;
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_WEAK_PASSWORD");
+
+        // Then: returns ApiError::WeakPassword
+        assert_eq!(res.unwrap_err(), ApiError::WeakPassword);
     }
 
     #[tokio::test]
     async fn test_token_never_returned_to_js() {
+        // Given: fresh database
         let handle = setup_test_db();
 
         let req_body = json!({
@@ -895,15 +1041,17 @@ mod tests {
             "tenant_code": "test_tnt"
         });
 
-        let res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/register-tenant".to_string(),
-            req_body,
+        // When: registering tenant
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body,
         )
         .await;
-        assert!(res.is_ok());
 
+        // Then: response does not contain any access or refresh tokens
+        assert!(res.is_ok());
         let res_val = res.unwrap();
         assert!(!res_val.to_string().contains("mock-token-usr_"));
         assert!(!res_val.to_string().contains("access_token"));
@@ -912,11 +1060,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_tenant_success() {
+        // Given: Seed user, tenant, member relation, and active session
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
-        // Seed user, tenant, member relation, and active session
         conn.execute(
             "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
             [hash_password("password123")],
@@ -938,21 +1086,21 @@ mod tests {
         )
         .unwrap();
 
-        // Set mock token in keyring
         set_secure_token("access_token", "mock-token-u1").unwrap();
 
-        // Perform select-tenant call
+        // When: Perform select-tenant call
         let req_body = json!({
             "tenant_id": "tnt1"
         });
-        let res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/select-tenant".to_string(),
-            req_body,
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/select-tenant",
+            &req_body,
         )
         .await;
 
+        // Then: selection succeeds and returns authenticated status
         assert!(res.is_ok());
         let res_val = res.unwrap();
         assert_eq!(
@@ -967,11 +1115,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_tenant_not_member() {
+        // Given: Seed user and session, but NO user_tenant relationship to tnt2
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
-        // Seed user and session, but NO user_tenant relationship to tnt2
         conn.execute(
             "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
             [hash_password("password123")],
@@ -988,25 +1136,27 @@ mod tests {
         let req_body = json!({
             "tenant_id": "tnt2"
         });
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/select-tenant".to_string(),
-            req_body,
+
+        // When: selecting tenant that user does not belong to
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/select-tenant",
+            &req_body,
         )
         .await;
 
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_TENANT_NOT_ASSIGNED");
+        // Then: returns ApiError::TenantNotAssigned
+        assert_eq!(res.unwrap_err(), ApiError::TenantNotAssigned);
     }
 
     #[tokio::test]
     async fn test_login_multi_tenant_requires_selection() {
+        // Given: user with 2 tenants
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
-        // Seed user with 2 tenants
         conn.execute(
             "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
             [hash_password("password123")],
@@ -1035,26 +1185,25 @@ mod tests {
         )
         .unwrap();
 
-        // Perform login
+        // When: Perform login
         let req_body = json!({
             "email": "test@example.com",
             "password": "password123"
         });
-        let login_res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/login".to_string(),
-            req_body,
+        let login_res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/login",
+            &req_body,
         )
         .await;
         assert!(login_res.is_ok());
 
-        // Get auth status
-        let status_res = get_auth_status(handle).await;
+        // Then: Get auth status should indicate needs_tenant_selection
+        let status_res = execute_get_auth_status(&handle).await;
         assert!(status_res.is_ok());
 
         let status_val = status_res.unwrap();
-        // The user has multiple tenants, so they should need selection and activeTenant must be null
         assert_eq!(
             status_val.get("status").unwrap().as_str().unwrap(),
             "needs_tenant_selection"
@@ -1068,11 +1217,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_tenant_success() {
+        // Given: Seed user and active session without active_tenant_id
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
-        // Seed user and active session without active_tenant_id
         conn.execute(
             "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
             [hash_password("password123")],
@@ -1093,14 +1242,16 @@ mod tests {
             "tax_id": "12345678"
         });
 
-        let res = api_call(
-            handle.clone(),
-            "POST".to_string(),
-            "/v1/auth/create-tenant".to_string(),
-            req_body,
+        // When: creating new tenant
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/create-tenant",
+            &req_body,
         )
         .await;
 
+        // Then: tenant creation succeeds
         assert!(res.is_ok());
         let res_val = res.unwrap();
         assert_eq!(res_val.get("user_id").unwrap().as_str().unwrap(), "u1");
@@ -1116,7 +1267,7 @@ mod tests {
         assert_eq!(active_token, "mock-scoped-token-u1");
 
         // Verify status is authenticated
-        let status_res = get_auth_status(handle).await.unwrap();
+        let status_res = execute_get_auth_status(&handle).await.unwrap();
         assert_eq!(
             status_res.get("status").unwrap().as_str().unwrap(),
             "authenticated"
@@ -1135,11 +1286,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_tenant_duplicate_code() {
+        // Given: Seed user, existing tenant with same code, and active session
         let handle = setup_test_db();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
-        // Seed user, existing tenant with same code, and active session
         conn.execute(
             "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
             [hash_password("password123")],
@@ -1165,16 +1316,17 @@ mod tests {
             "tax_id": ""
         });
 
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/create-tenant".to_string(),
-            req_body,
+        // When: creating tenant with duplicate code
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/create-tenant",
+            &req_body,
         )
         .await;
 
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_TENANT_CODE_TAKEN");
+        // Then: returns ApiError::TenantCodeTaken
+        assert_eq!(res.unwrap_err(), ApiError::TenantCodeTaken);
     }
 
     #[test]
@@ -1195,7 +1347,7 @@ mod tests {
         // When: deleting the password
         delete_secure_token(key).unwrap();
 
-        // Then: retrieving it should fail
+        // Then: retrieving it should fail with KeychainError
         assert!(get_secure_token(key).is_err());
     }
 
@@ -1221,16 +1373,16 @@ mod tests {
         set_secure_token("access_token", "mock-token-u1").unwrap();
         set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
 
-        // When: calling api_call with logout path
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/logout".to_string(),
-            json!({}),
+        // When: calling execute_api_call with logout path
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/logout",
+            &json!({}),
         )
         .await;
 
-        // Then: the api_call should succeed
+        // Then: the call should succeed
         assert!(res.is_ok());
 
         // And: the session should be deleted from SQLite
@@ -1252,18 +1404,17 @@ mod tests {
         set_secure_token("access_token", "mock-token-u1").unwrap();
         set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
 
-        // When: calling api_call with an endpoint that returns invalid credentials (using our test expire endpoint)
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/test/expire".to_string(),
-            json!({}),
+        // When: calling execute_api_call with an endpoint that returns invalid credentials
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/test/expire",
+            &json!({}),
         )
         .await;
 
-        // Then: the api_call should return IAM_ERR_INVALID_CREDENTIALS error
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_INVALID_CREDENTIALS");
+        // Then: returns ApiError::InvalidCredentials
+        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
         // And: Keychain tokens should be automatically cleared
         assert!(get_secure_token("access_token").is_err());
@@ -1278,20 +1429,19 @@ mod tests {
         set_secure_token("refresh_token", "mock-refresh-prev").unwrap();
 
         // When: login fails with invalid credentials
-        let res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/login".to_string(),
-            json!({
+        let res = execute_api_call(
+            &handle,
+            "POST",
+            "/v1/auth/login",
+            &json!({
                 "email": "test@example.com",
                 "password": "wrong_password"
             }),
         )
         .await;
 
-        // Then: api_call should return IAM_ERR_INVALID_CREDENTIALS error
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err(), "IAM_ERR_INVALID_CREDENTIALS");
+        // Then: returns ApiError::InvalidCredentials
+        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
         // And: the previous token should STILL exist (not cleared)
         assert_eq!(get_secure_token("access_token").unwrap(), "mock-token-prev");
@@ -1312,7 +1462,7 @@ mod tests {
         let _ = delete_secure_token("access_token");
 
         // When: checking auth status
-        let res = get_auth_status(handle).await;
+        let res = execute_get_auth_status(&handle).await;
 
         // Then: should return unauthenticated
         assert!(res.is_ok());
@@ -1344,7 +1494,7 @@ mod tests {
         set_secure_token("access_token", "mock-token-unew").unwrap();
 
         // When: checking auth status
-        let res = get_auth_status(handle).await;
+        let res = execute_get_auth_status(&handle).await;
 
         // Then: should return needs_tenant_creation
         assert!(res.is_ok());
@@ -1388,7 +1538,7 @@ mod tests {
         set_secure_token("access_token", "mock-token-umulti").unwrap();
 
         // When: checking auth status
-        let res = get_auth_status(handle).await;
+        let res = execute_get_auth_status(&handle).await;
 
         // Then: should return needs_tenant_selection
         assert!(res.is_ok());
@@ -1432,7 +1582,7 @@ mod tests {
         set_secure_token("access_token", "mock-token-uauth").unwrap();
 
         // When: checking auth status
-        let res = get_auth_status(handle).await;
+        let res = execute_get_auth_status(&handle).await;
 
         // Then: should return authenticated with activeTenant populated
         assert!(res.is_ok());
