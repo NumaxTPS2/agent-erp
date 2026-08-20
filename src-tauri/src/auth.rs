@@ -1300,4 +1300,144 @@ mod tests {
             "mock-refresh-prev"
         );
     }
+
+    // ==========================================
+    // Issue #30 Layer 1 Acceptance Criteria Tests
+    // ==========================================
+
+    #[tokio::test]
+    async fn test_get_auth_status_unauthenticated() {
+        // Given: no token in Keychain
+        let handle = setup_test_db();
+        let _ = delete_secure_token("access_token");
+
+        // When: checking auth status
+        let res = get_auth_status(handle).await;
+
+        // Then: should return unauthenticated
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "unauthenticated");
+        assert!(val.get("user").unwrap().is_null());
+        assert!(val.get("activeTenant").unwrap().is_null());
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_status_needs_tenant_creation() {
+        // Given: user logged in with session but has 0 tenants assigned
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u_new', 'newuser@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-unew', 'u_new', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-unew").unwrap();
+
+        // When: checking auth status
+        let res = get_auth_status(handle).await;
+
+        // Then: should return needs_tenant_creation
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "needs_tenant_creation");
+        assert_eq!(val.get("user").unwrap().get("email").unwrap().as_str().unwrap(), "newuser@example.com");
+        assert!(val.get("tenants").unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_status_needs_tenant_selection() {
+        // Given: user with multiple tenants but active_tenant_id is NULL
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u_multi', 'multi@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name) VALUES ('tnt_a', 'code_a', 'Tenant A', 'Comp A'), ('tnt_b', 'code_b', 'Tenant B', 'Comp B')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES ('u_multi', 'tnt_a', 'admin'), ('u_multi', 'tnt_b', 'member')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-umulti', 'u_multi', NULL, 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-umulti").unwrap();
+
+        // When: checking auth status
+        let res = get_auth_status(handle).await;
+
+        // Then: should return needs_tenant_selection
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "needs_tenant_selection");
+        assert_eq!(val.get("tenants").unwrap().as_array().unwrap().len(), 2);
+        assert!(val.get("activeTenant").unwrap().is_null());
+    }
+
+    #[tokio::test]
+    async fn test_get_auth_status_authenticated() {
+        // Given: user with active_tenant_id selected in session
+        let handle = setup_test_db();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, email, password) VALUES ('u_auth', 'auth@example.com', ?1)",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name) VALUES ('tnt_act', 'code_act', 'Active Tenant', 'Active Comp')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES ('u_auth', 'tnt_act', 'admin')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, active_tenant_id, created_at) VALUES ('mock-token-uauth', 'u_auth', 'tnt_act', 1234567890)",
+            [],
+        )
+        .unwrap();
+
+        set_secure_token("access_token", "mock-token-uauth").unwrap();
+
+        // When: checking auth status
+        let res = get_auth_status(handle).await;
+
+        // Then: should return authenticated with activeTenant populated
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "authenticated");
+        assert_eq!(val.get("activeTenant").unwrap().get("code").unwrap().as_str().unwrap(), "code_act");
+    }
 }
