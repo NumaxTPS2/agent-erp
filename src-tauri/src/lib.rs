@@ -104,11 +104,15 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
+            password TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT ''
         )",
         [],
     )
     .map_err(|e| format!("Failed to create users table: {}", e))?;
+
+    // Migration to add name column to users if it does not exist
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''", []);
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tenants (

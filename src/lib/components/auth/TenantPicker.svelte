@@ -17,11 +17,10 @@
       }
     } catch (err) {
       console.error("Select tenant failed:", err);
-      const code = err?.code || (typeof err === 'string' ? err : '');
-      if (code === 'IAM_ERR_TENANT_NOT_ASSIGNED') {
+      if (err === 'IAM_ERR_TENANT_NOT_ASSIGNED') {
         errorMessage = '無此租戶的存取權限 (IAM_ERR_TENANT_NOT_ASSIGNED)';
       } else {
-        errorMessage = `租戶選取失敗：${err?.message || err}`;
+        errorMessage = `租戶選取失敗：${err}`;
       }
     } finally {
       isLoading = false;

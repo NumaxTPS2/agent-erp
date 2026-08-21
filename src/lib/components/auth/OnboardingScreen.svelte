@@ -59,11 +59,10 @@
       }
     } catch (err) {
       console.error("Create tenant failed:", err);
-      const code = err?.code || (typeof err === 'string' ? err : '');
-      if (code === 'IAM_ERR_TENANT_CODE_TAKEN') {
+      if (err === 'IAM_ERR_TENANT_CODE_TAKEN') {
         errors.tenantCode = '此集團代碼已被使用 (IAM_ERR_TENANT_CODE_TAKEN)';
       } else {
-        errorMessage = `建立公司失敗：${err?.message || err}`;
+        errorMessage = `建立公司失敗：${err}`;
       }
     } finally {
       isLoading = false;

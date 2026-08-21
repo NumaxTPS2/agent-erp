@@ -11,7 +11,7 @@
       </div>
       
       <p class="security-warning">
-        偵測到 AI Agent 試圖修改本地 ERP 核心數據庫。該防禦動作已被安全扣留，需要 {appState.authUser?.email || '操作者'} 進行實體審核確認。
+        偵測到 AI Agent 試圖修改本地 ERP 核心數據庫。該防禦動作已被安全扣留，需要 {appState.authUser?.display_name || appState.authUser?.email || '操作者'} 進行實體審核確認。
       </p>
 
       <div class="security-info-box">

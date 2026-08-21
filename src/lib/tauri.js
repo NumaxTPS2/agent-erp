@@ -21,8 +21,8 @@ let mockInstalledModules = [];
 
 // Local mock database for user authentication
 let mockUsers = [
-  { id: "usr_mock_admin", email: "admin@example.com", password: "password123" },
-  { id: "usr_mock_new", email: "new@example.com", password: "password123" }
+  { id: "usr_mock_admin", email: "admin@example.com", password: "password123", name: "Admin User" },
+  { id: "usr_mock_new", email: "new@example.com", password: "password123", name: "New User" }
 ];
 let mockTenants = [
   { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." },
@@ -242,7 +242,7 @@ export async function invoke(cmd, args = {}) {
       }
       return {
         status,
-        user: user ? { id: user.id, email: user.email } : null,
+        user: user ? { id: user.id, email: user.email, display_name: user.name || user.email } : null,
         tenants,
         activeTenant
       };
@@ -254,7 +254,7 @@ export async function invoke(cmd, args = {}) {
         const { email, password } = body;
         const user = mockUsers.find(u => u.email === email);
         if (!user || user.password !== password) {
-          throw { code: "IAM_ERR_INVALID_CREDENTIALS", message: "invalid credentials" };
+          throw "IAM_ERR_INVALID_CREDENTIALS";
         }
         const userTnts = mockUserTenants.filter(ut => ut.user_id === user.id);
         const tenants = userTnts.map(ut => {
@@ -272,21 +272,24 @@ export async function invoke(cmd, args = {}) {
           active_tenant_id: tenants.length === 1 ? tenants[0].id : null
         };
         return {
-          user: { id: user.id, email: user.email },
+          user: { id: user.id, email: user.email, display_name: user.name || user.email },
           tenants
         };
       }
       if (method === 'POST' && path === '/v1/auth/register-tenant') {
-        const { tenant_name, company_name, admin_email, admin_password, tenant_code } = body;
+        const { admin_name, tenant_name, company_name, admin_email, admin_password, tenant_code } = body;
+        if (!admin_name || !admin_name.trim()) {
+          throw "IAM_ERR_INVALID_ARGUMENT";
+        }
         if (admin_password.length < 8) {
-          throw { code: "IAM_ERR_WEAK_PASSWORD", message: "weak password" };
+          throw "IAM_ERR_WEAK_PASSWORD";
         }
         if (mockUsers.some(u => u.email === admin_email)) {
-          throw { code: "IAM_ERR_EMAIL_TAKEN", message: "email already taken" };
+          throw "IAM_ERR_EMAIL_TAKEN";
         }
         const user_id = `usr_${Date.now()}`;
         const tenant_id = `tnt_${Date.now()}`;
-        mockUsers.push({ id: user_id, email: admin_email, password: admin_password });
+        mockUsers.push({ id: user_id, email: admin_email, password: admin_password, name: admin_name.trim() });
         mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name });
         mockUserTenants.push({ user_id, tenant_id, role: "admin" });
         mockSessions = {
@@ -295,19 +298,19 @@ export async function invoke(cmd, args = {}) {
           active_tenant_id: tenant_id
         };
         return {
-          user: { id: user_id, email: admin_email },
+          user: { id: user_id, email: admin_email, display_name: admin_name.trim() },
           tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
         };
       }
       if (method === 'POST' && path === '/v1/auth/select-tenant') {
         const { tenant_id } = body;
         if (!mockSessions) {
-          throw { code: "IAM_ERR_INVALID_CREDENTIALS", message: "Session not found" };
+          throw "auth: Session not found";
         }
         const userTnts = mockUserTenants.filter(ut => ut.user_id === mockSessions.user_id);
         const isMember = userTnts.some(ut => ut.tenant_id === tenant_id);
         if (!isMember) {
-          throw { code: "IAM_ERR_TENANT_NOT_ASSIGNED", message: "tenant not assigned" };
+          throw "IAM_ERR_TENANT_NOT_ASSIGNED";
         }
         mockSessions.active_tenant_id = tenant_id;
 
@@ -324,10 +327,10 @@ export async function invoke(cmd, args = {}) {
       if (method === 'POST' && path === '/v1/auth/create-tenant') {
         const { tenant_name, company_name, tenant_code, tax_id } = body;
         if (!mockSessions) {
-          throw { code: "IAM_ERR_INVALID_CREDENTIALS", message: "Session not found" };
+          throw "auth: Session not found";
         }
         if (mockTenants.some(t => t.code === tenant_code)) {
-          throw { code: "IAM_ERR_TENANT_CODE_TAKEN", message: "tenant code taken" };
+          throw "IAM_ERR_TENANT_CODE_TAKEN";
         }
         const tenant_id = `tnt_${Date.now()}`;
         mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name, tax_id });
@@ -353,9 +356,9 @@ export async function invoke(cmd, args = {}) {
         return {};
       }
       if (method === 'POST' && path === '/v1/test/expire') {
-        throw { code: "IAM_ERR_INVALID_CREDENTIALS", message: "invalid credentials" };
+        throw "IAM_ERR_INVALID_CREDENTIALS";
       }
-      throw { code: "UNKNOWN_ERROR", message: `Mock API endpoint not found: ${method} ${path}` };
+      throw `Mock API endpoint not found: ${method} ${path}`;
     }
     
     case 'logout': {

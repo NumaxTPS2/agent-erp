@@ -28,11 +28,10 @@
       }
     } catch (err) {
       console.error("Login failed:", err);
-      const code = err?.code || (typeof err === 'string' ? err : '');
-      if (code === 'IAM_ERR_INVALID_CREDENTIALS') {
+      if (err === 'IAM_ERR_INVALID_CREDENTIALS') {
         errorMessage = '帳號或密碼錯誤 (IAM_ERR_INVALID_CREDENTIALS)';
       } else {
-        errorMessage = `登入失敗：${err?.message || err}`;
+        errorMessage = `登入失敗：${err}`;
       }
     } finally {
       isLoading = false;

@@ -238,10 +238,10 @@
       {#if appState.authUser}
         <div class="user-profile-section">
           <div class="user-avatar">
-            {appState.authUser.email[0].toUpperCase()}
+            {(appState.authUser.display_name || appState.authUser.email)[0].toUpperCase()}
           </div>
           <div class="user-info">
-            <span class="user-email">{appState.authUser.email}</span>
+            <span class="user-email">{appState.authUser.display_name || appState.authUser.email}</span>
             <span class="tenant-tag">{appState.activeTenant?.name || '無租戶'}</span>
           </div>
           <button class="logout-btn" onclick={logoutAction} title="登出">
@@ -385,7 +385,7 @@
                 {#if order}
                   <div class="detail-header">
                     <h2>銷售訂單草稿：{order.so_id}</h2>
-                    <span class="badge {order.status === 'approved' ? 'badge-emerald' : 'badge-amber'}">{order.status === 'approved' ? '已核准放行' : '等候 ' + (appState.authUser?.email || '操作者') + ' 安全確認'}</span>
+                    <span class="badge {order.status === 'approved' ? 'badge-emerald' : 'badge-amber'}">{order.status === 'approved' ? '已核准放行' : '等候 ' + (appState.authUser?.display_name || appState.authUser?.email || '操作者') + ' 安全確認'}</span>
                   </div>
                   
                   <div class="detail-grid">
@@ -439,7 +439,7 @@
                         <h4>AI Agent 預審結果</h4>
                       </div>
                       <p>
-                        該採購單利潤率為 25%，消耗邊緣工廠 85% 產能。系統已成功排程生產，剩餘 15% 產能可用於彈性接單。建議 {appState.authUser?.email || '您'} 核准此寫入動作以同步庫存帳本。
+                        該採購單利潤率為 25%，消耗邊緣工廠 85% 產能。系統已成功排程生產，剩餘 15% 產能可用於彈性接單。建議 {appState.authUser?.display_name || appState.authUser?.email || '您'} 核准此寫入動作以同步庫存帳本。
                       </p>
                       <button class="btn btn-primary" onclick={() => triggerAcceptOrder(order)}>
                         核准接單並釋放指令
@@ -526,7 +526,7 @@
 
             <div class="settings-group glass-panel">
               <h3>邊緣寫入攔截審計紀錄 (SQLite Audit Trail)</h3>
-              <p class="settings-desc">記錄每一次經由 {appState.authUser?.email || '操作者'} 實體點擊確認釋放的 database write 歷史。採用哈希鏈（Hash Chain）防篡改。</p>
+              <p class="settings-desc">記錄每一次經由 {appState.authUser?.display_name || appState.authUser?.email || '操作者'} 實體點擊確認釋放的 database write 歷史。採用哈希鏈（Hash Chain）防篡改。</p>
               <div class="audit-list">
                 {#if appState.auditLogs.length === 0}
                   <div class="empty-audit">目前尚無寫入審計記錄。</div>
@@ -556,7 +556,13 @@
               <div class="settings-status-box" style="margin-top: 16px; padding: 12px; border-radius: 6px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color);">
                 <div style="margin-bottom: 8px;">
                   <span style="color: var(--text-muted); font-size: 0.85rem;">目前帳戶：</span>
-                  <span style="color: var(--text-primary); font-weight: 600; font-size: 0.9rem;">{appState.authUser?.email || '未登入'}</span>
+                  <span style="color: var(--text-primary); font-weight: 600; font-size: 0.9rem;">
+                    {#if appState.authUser}
+                      {appState.authUser.display_name ? `${appState.authUser.display_name} (${appState.authUser.email})` : appState.authUser.email}
+                    {:else}
+                      未登入
+                    {/if}
+                  </span>
                 </div>
                 <div>
                   <span style="color: var(--text-muted); font-size: 0.85rem;">活動租戶：</span>

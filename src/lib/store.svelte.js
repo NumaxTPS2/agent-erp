@@ -240,7 +240,8 @@ pub_fn("approveMutation");
 export async function approveMutation(id) {
   if (!appState.pendingMutation) return;
   try {
-    await invoke('confirm_mutation', { mutationId: id, approved: true, operator: appState.authUser?.email || 'Unknown' });
+    const operator = appState.authUser?.display_name || appState.authUser?.email || 'Unknown';
+    await invoke('confirm_mutation', { mutationId: id, approved: true, operator });
     appState.pendingMutation = null;
     await fetchOrders();
     await fetchAuditLogs();
@@ -259,14 +260,15 @@ pub_fn("rejectMutation");
 export async function rejectMutation(id) {
   if (!appState.pendingMutation) return;
   try {
-    await invoke('confirm_mutation', { mutationId: id, approved: false, operator: appState.authUser?.email || 'Unknown' });
+    const operator = appState.authUser?.display_name || appState.authUser?.email || 'Unknown';
+    await invoke('confirm_mutation', { mutationId: id, approved: false, operator });
     appState.pendingMutation = null;
     await fetchOrders();
     await fetchAuditLogs();
     
     appState.chatMessages.push({
       role: 'assistant',
-      content: `已拒絕訂單 ${id} 的核准寫入。該指令已被安全阻斷，審計日誌已記錄 ${appState.authUser?.email || '操作者'} 的拒絕動作。`
+      content: `已拒絕訂單 ${id} 的核准寫入。該指令已被安全阻斷，審計日誌已記錄 ${operator === 'Unknown' ? '操作者' : operator} 的拒絕動作。`
     });
   } catch (err) {
     console.error("Failed to reject mutation:", err);
@@ -416,9 +418,8 @@ export async function apiCall(method, path, body = {}) {
   try {
     return await invoke('api_call', { method, path, body });
   } catch (err) {
-    const errCode = err?.code || (typeof err === 'string' ? err : '');
-    const errMsg = err?.message || (typeof err === 'string' ? err : '');
-    if (path !== '/v1/auth/login' && (errCode === 'IAM_ERR_INVALID_CREDENTIALS' || errMsg.includes('401') || errMsg.includes('UNAUTHENTICATED'))) {
+    const errMsg = err?.message || err || '';
+    if (path !== '/v1/auth/login' && (errMsg === 'IAM_ERR_INVALID_CREDENTIALS' || errMsg.toString().includes('401') || errMsg.toString().includes('UNAUTHENTICATED'))) {
       showToast('登入已過期');
       appState.authStatus = 'unauthenticated';
       appState.authUser = null;
@@ -436,8 +437,9 @@ export async function login(email, password) {
   return res;
 }
 
-export async function registerTenant(tenantName, companyName, adminEmail, adminPassword, tenantCode) {
+export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode) {
   const res = await apiCall('POST', '/v1/auth/register-tenant', {
+    admin_name: adminName,
     tenant_name: tenantName,
     company_name: companyName,
     admin_email: adminEmail,
