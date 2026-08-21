@@ -81,14 +81,15 @@
       }
     } catch (err) {
       console.error("Registration failed:", err);
-      if (err === 'IAM_ERR_EMAIL_TAKEN') {
+      const code = err?.code || err;
+      if (code === 'IAM_ERR_EMAIL_TAKEN') {
         errorMessage = '該電子郵件已被註冊過 (IAM_ERR_EMAIL_TAKEN)';
         currentStep = 1; // Send back to step 1
-      } else if (err === 'IAM_ERR_WEAK_PASSWORD') {
+      } else if (code === 'IAM_ERR_WEAK_PASSWORD') {
         errorMessage = '密碼強度不足，請使用更複雜的密碼 (IAM_ERR_WEAK_PASSWORD)';
         currentStep = 1;
       } else {
-        errorMessage = `註冊失敗：${err}`;
+        errorMessage = `註冊失敗：${err?.message || err?.code || err}`;
       }
     } finally {
       isLoading = false;
