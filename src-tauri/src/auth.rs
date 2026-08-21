@@ -303,7 +303,7 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
 
             // Retrieve user credentials
             let mut stmt = conn
-                .prepare("SELECT id, email, password FROM users WHERE email = ?1")
+                .prepare("SELECT id, email, password, name FROM users WHERE email = ?1")
                 .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
 
             let user_res = stmt.query_row([email], |row| {
@@ -311,11 +311,12 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, String>(3).unwrap_or_default(),
                 ))
             });
 
             match user_res {
-                Ok((id, db_email, db_password)) => {
+                Ok((id, db_email, db_password, db_name)) => {
                     let hashed_password = hash_password(password);
                     if db_password != hashed_password {
                         return Err(ApiError::InvalidCredentials);
@@ -369,12 +370,19 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                         )
                     ).map_err(|e| ApiError::DatabaseError(format!("Failed to create session: {}", e)))?;
 
+                    let display_name = if db_name.trim().is_empty() {
+                        db_email.clone()
+                    } else {
+                        db_name
+                    };
+
                     Ok(json!({
                         "access_token": mock_token,
                         "refresh_token": format!("mock-refresh-{}", id),
                         "user": {
                             "id": id,
-                            "email": db_email
+                            "email": db_email,
+                            "display_name": display_name
                         },
                         "tenants": tenants
                     }))
@@ -384,6 +392,10 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
         }
 
         ("POST", "/v1/auth/register-tenant") => {
+            let admin_name = body
+                .get("admin_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_name parameter".to_string()))?;
             let tenant_name = body
                 .get("tenant_name")
                 .and_then(|v| v.as_str())
@@ -405,6 +417,10 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
 
+            if admin_name.trim().is_empty() {
+                return Err(ApiError::InvalidArgument("admin_name cannot be empty".to_string()));
+            }
+
             if admin_password.len() < 8 {
                 return Err(ApiError::WeakPassword);
             }
@@ -421,11 +437,11 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
             let user_id = format!("usr_{}", uuid_like_id());
             let tenant_id = format!("tnt_{}", uuid_like_id());
 
-            // Save user
+            // Save user with name
             let hashed_admin_password = hash_password(admin_password);
             conn.execute(
-                "INSERT INTO users (id, email, password) VALUES (?1, ?2, ?3)",
-                (&user_id, admin_email, &hashed_admin_password),
+                "INSERT INTO users (id, email, password, name) VALUES (?1, ?2, ?3, ?4)",
+                (&user_id, admin_email, &hashed_admin_password, admin_name),
             )
             .map_err(|e| ApiError::DatabaseError(format!("Failed to register user: {}", e)))?;
 
@@ -465,7 +481,8 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 "refresh_token": format!("mock-refresh-{}", user_id),
                 "user": {
                     "id": user_id,
-                    "email": admin_email
+                    "email": admin_email,
+                    "display_name": admin_name
                 },
                 "tenants": [
                     {
@@ -690,10 +707,12 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
     match session_res {
         Ok((user_id, active_tenant_id)) => {
             let mut stmt_user = conn
-                .prepare("SELECT email FROM users WHERE id = ?1")
+                .prepare("SELECT email, name FROM users WHERE id = ?1")
                 .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
-            let email: String = stmt_user
-                .query_row([&user_id], |row| row.get(0))
+            let (email, name): (String, String) = stmt_user
+                .query_row([&user_id], |row| {
+                    Ok((row.get(0)?, row.get::<_, String>(1).unwrap_or_default()))
+                })
                 .map_err(|_| ApiError::DatabaseError("User record missing for session".to_string()))?;
 
             let mut stmt_tenants = conn
@@ -739,11 +758,18 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
                 "authenticated"
             };
 
+            let display_name = if name.trim().is_empty() {
+                email.clone()
+            } else {
+                name
+            };
+
             Ok(json!({
                 "status": status,
                 "user": {
                     "id": user_id,
-                    "email": email
+                    "email": email,
+                    "display_name": display_name
                 },
                 "tenants": tenants,
                 "activeTenant": active_tenant
@@ -839,7 +865,8 @@ mod tests {
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
                 email TEXT NOT NULL UNIQUE,
-                password TEXT NOT NULL
+                password TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT ''
             )",
             [],
         )
@@ -884,14 +911,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_success() {
-        // Given: setup user in test database and in-memory token store
+        // Given: setup user with name in test database and in-memory token store
         let handle = setup_test_db();
         let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
         conn.execute(
-            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            "INSERT INTO users (id, email, password, name) VALUES ('u1', 'test@example.com', ?1, 'Test Admin')",
             [hash_password("password123")],
         )
         .unwrap();
@@ -911,7 +938,7 @@ mod tests {
         )
         .await;
 
-        // Then: login succeeds
+        // Then: login succeeds and returns display_name
         assert!(res.is_ok());
 
         let res_val = res.unwrap();
@@ -925,6 +952,16 @@ mod tests {
                 .unwrap(),
             "test@example.com"
         );
+        assert_eq!(
+            res_val
+                .get("user")
+                .unwrap()
+                .get("display_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Test Admin"
+        );
 
         // Ensure access_token/refresh_token was removed from response
         assert!(res_val.get("access_token").is_none());
@@ -937,6 +974,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_login_fallback_display_name_to_email() {
+        // Given: user with empty name in database
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO users (id, email, password, name) VALUES ('u1', 'noname@example.com', ?1, '')",
+            [hash_password("password123")],
+        )
+        .unwrap();
+
+        let req_body = json!({
+            "email": "noname@example.com",
+            "password": "password123"
+        });
+
+        // When: user logs in
+        let res = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/login",
+            &req_body,
+        )
+        .await;
+
+        // Then: display_name falls back to email
+        assert!(res.is_ok());
+        let res_val = res.unwrap();
+        assert_eq!(
+            res_val
+                .get("user")
+                .unwrap()
+                .get("display_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "noname@example.com"
+        );
+    }
+
+    #[tokio::test]
     async fn test_login_invalid_credentials() {
         // Given: setup user in test database and in-memory token store
         let handle = setup_test_db();
@@ -945,7 +1026,7 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
         conn.execute(
-            "INSERT INTO users (id, email, password) VALUES ('u1', 'test@example.com', ?1)",
+            "INSERT INTO users (id, email, password, name) VALUES ('u1', 'test@example.com', ?1, 'Test User')",
             [hash_password("password123")],
         )
         .unwrap();
@@ -994,6 +1075,7 @@ mod tests {
         let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
+            "admin_name": "Peter Chen",
             "tenant_name": "Test Tenant",
             "company_name": "Test Company",
             "admin_email": "admin@example.com",
@@ -1011,7 +1093,7 @@ mod tests {
         )
         .await;
 
-        // Then: registration succeeds
+        // Then: registration succeeds and returns admin_name as display_name
         assert!(res.is_ok());
 
         let res_val = res.unwrap();
@@ -1024,6 +1106,16 @@ mod tests {
                 .as_str()
                 .unwrap(),
             "admin@example.com"
+        );
+        assert_eq!(
+            res_val
+                .get("user")
+                .unwrap()
+                .get("display_name")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Peter Chen"
         );
         assert_eq!(res_val.get("tenants").unwrap().as_array().unwrap().len(), 1);
         assert_eq!(
@@ -1042,6 +1134,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_register_tenant_missing_or_empty_admin_name() {
+        // Given: fresh database
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+
+        let req_body_empty = json!({
+            "admin_name": "   ",
+            "tenant_name": "Test Tenant",
+            "company_name": "Test Company",
+            "admin_email": "admin@example.com",
+            "admin_password": "secure_password",
+            "tenant_code": "test_tnt"
+        });
+
+        // When: registering with empty admin_name
+        let res = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body_empty,
+        )
+        .await;
+
+        // Then: returns InvalidArgument error
+        assert!(matches!(res.unwrap_err(), ApiError::InvalidArgument(_)));
+    }
+
+    #[tokio::test]
     async fn test_register_tenant_email_taken() {
         // Given: database with existing email
         let handle = setup_test_db();
@@ -1050,12 +1171,13 @@ mod tests {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
         conn.execute(
-            "INSERT INTO users (id, email, password) VALUES ('u1', 'admin@example.com', ?1)",
+            "INSERT INTO users (id, email, password, name) VALUES ('u1', 'admin@example.com', ?1, 'Admin')",
             [hash_password("password123")],
         )
         .unwrap();
 
         let req_body = json!({
+            "admin_name": "Peter Chen",
             "tenant_name": "Test Tenant",
             "company_name": "Test Company",
             "admin_email": "admin@example.com",
@@ -1084,6 +1206,7 @@ mod tests {
         let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
+            "admin_name": "Peter Chen",
             "tenant_name": "Test Tenant",
             "company_name": "Test Company",
             "admin_email": "admin@example.com",
@@ -1112,6 +1235,7 @@ mod tests {
         let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
+            "admin_name": "Peter Chen",
             "tenant_name": "Test Tenant",
             "company_name": "Test Company",
             "admin_email": "admin@example.com",

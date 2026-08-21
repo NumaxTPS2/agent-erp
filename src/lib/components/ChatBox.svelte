@@ -73,7 +73,7 @@
     {#each appState.chatMessages as msg}
       <div class="message-row {msg.role}">
         <div class="message-bubble {msg.role}">
-          <div class="message-meta">{msg.role === 'user' ? (appState.authUser?.email || '操作者') : 'AgentERP 專家'}</div>
+          <div class="message-meta">{msg.role === 'user' ? (appState.authUser?.display_name || appState.authUser?.email || '操作者') : 'AgentERP 專家'}</div>
           <div class="message-body">{msg.content}</div>
         </div>
       </div>

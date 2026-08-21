@@ -4,6 +4,7 @@
   let currentStep = $state(1); // 1: Account, 2: Company
   
   // Form fields
+  let adminName = $state('');
   let adminEmail = $state('');
   let adminPassword = $state('');
   let confirmPassword = $state('');
@@ -31,6 +32,7 @@
 
   // Step 1 validation
   let isStep1Valid = $derived(
+    adminName.trim().length > 0 &&
     adminEmail && 
     adminPassword && 
     adminPassword.length >= 8 && 
@@ -69,7 +71,7 @@
     errorMessage = '';
 
     try {
-      await registerTenant(tenantName, companyName, adminEmail, adminPassword, tenantCode);
+      await registerTenant(adminName.trim(), tenantName, companyName, adminEmail, adminPassword, tenantCode);
       if (appState.authStatus === 'authenticated') {
         navigate('/app/sales');
       } else if (appState.authStatus === 'needs_tenant_creation') {
@@ -79,15 +81,14 @@
       }
     } catch (err) {
       console.error("Registration failed:", err);
-      const code = err?.code || (typeof err === 'string' ? err : '');
-      if (code === 'IAM_ERR_EMAIL_TAKEN') {
+      if (err === 'IAM_ERR_EMAIL_TAKEN') {
         errorMessage = '該電子郵件已被註冊過 (IAM_ERR_EMAIL_TAKEN)';
         currentStep = 1; // Send back to step 1
-      } else if (code === 'IAM_ERR_WEAK_PASSWORD') {
+      } else if (err === 'IAM_ERR_WEAK_PASSWORD') {
         errorMessage = '密碼強度不足，請使用更複雜的密碼 (IAM_ERR_WEAK_PASSWORD)';
         currentStep = 1;
       } else {
-        errorMessage = `註冊失敗：${err?.message || err}`;
+        errorMessage = `註冊失敗：${err}`;
       }
     } finally {
       isLoading = false;
@@ -128,6 +129,18 @@
       {#if currentStep === 1}
         <!-- STEP 1: ACCOUNT DETAILS -->
         <div class="step-panel">
+          <div class="form-group">
+            <label for="adminName">管理員姓名 (Admin Name)</label>
+            <input 
+              type="text" 
+              id="adminName" 
+              bind:value={adminName}
+              placeholder="e.g. 陳大明 / Peter Chen"
+              disabled={isLoading}
+              required
+            />
+          </div>
+
           <div class="form-group">
             <label for="adminEmail">管理員電子郵件 (Admin Email)</label>
             <input 
