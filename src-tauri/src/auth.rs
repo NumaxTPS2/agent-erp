@@ -1,9 +1,131 @@
-#[cfg(not(test))]
 use keyring::Entry;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::env;
+use std::sync::RwLock;
 use std::time::SystemTime;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
+pub trait TokenStore: Send + Sync {
+    fn save(&self, access: &str, refresh: &str) -> Result<(), ApiError>;
+    fn load(&self) -> Result<Option<TokenPair>, ApiError>;
+    fn clear(&self) -> Result<(), ApiError>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct KeyringTokenStore;
+
+impl KeyringTokenStore {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl TokenStore for KeyringTokenStore {
+    fn save(&self, access: &str, refresh: &str) -> Result<(), ApiError> {
+        let entry_access = Entry::new("agent-erp-auth", "access_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        entry_access
+            .set_password(access)
+            .map_err(|e| ApiError::KeychainError(format!("Keyring store failed: {}", e)))?;
+
+        let entry_refresh = Entry::new("agent-erp-auth", "refresh_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        entry_refresh
+            .set_password(refresh)
+            .map_err(|e| ApiError::KeychainError(format!("Keyring store failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn load(&self) -> Result<Option<TokenPair>, ApiError> {
+        let entry_access = Entry::new("agent-erp-auth", "access_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        let access_token = match entry_access.get_password() {
+            Ok(pwd) => pwd,
+            Err(keyring::Error::NoEntry) => return Ok(None),
+            Err(e) => return Err(ApiError::KeychainError(format!("Keyring retrieve failed: {}", e))),
+        };
+
+        let entry_refresh = Entry::new("agent-erp-auth", "refresh_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        let refresh_token = match entry_refresh.get_password() {
+            Ok(pwd) => Some(pwd),
+            Err(keyring::Error::NoEntry) => None,
+            Err(e) => return Err(ApiError::KeychainError(format!("Keyring retrieve failed: {}", e))),
+        };
+
+        Ok(Some(TokenPair {
+            access_token,
+            refresh_token,
+        }))
+    }
+
+    fn clear(&self) -> Result<(), ApiError> {
+        let entry_access = Entry::new("agent-erp-auth", "access_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        let _ = entry_access.delete_password();
+
+        let entry_refresh = Entry::new("agent-erp-auth", "refresh_token")
+            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
+        let _ = entry_refresh.delete_password();
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryTokenStore {
+    tokens: RwLock<Option<TokenPair>>,
+}
+
+impl InMemoryTokenStore {
+    pub fn new() -> Self {
+        Self {
+            tokens: RwLock::new(None),
+        }
+    }
+}
+
+impl TokenStore for InMemoryTokenStore {
+    fn save(&self, access: &str, refresh: &str) -> Result<(), ApiError> {
+        let mut lock = self
+            .tokens
+            .write()
+            .map_err(|e| ApiError::KeychainError(format!("InMemory lock poisoned: {}", e)))?;
+        *lock = Some(TokenPair {
+            access_token: access.to_string(),
+            refresh_token: if refresh.is_empty() {
+                None
+            } else {
+                Some(refresh.to_string())
+            },
+        });
+        Ok(())
+    }
+
+    fn load(&self) -> Result<Option<TokenPair>, ApiError> {
+        let lock = self
+            .tokens
+            .read()
+            .map_err(|e| ApiError::KeychainError(format!("InMemory lock poisoned: {}", e)))?;
+        Ok(lock.clone())
+    }
+
+    fn clear(&self) -> Result<(), ApiError> {
+        let mut lock = self
+            .tokens
+            .write()
+            .map_err(|e| ApiError::KeychainError(format!("InMemory lock poisoned: {}", e)))?;
+        *lock = None;
+        Ok(())
+    }
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
 pub enum ApiError {
@@ -87,69 +209,6 @@ fn hash_password(password: &str) -> String {
     hex::encode(result)
 }
 
-#[cfg(test)]
-thread_local! {
-    static MOCK_KEYRING: std::sync::Mutex<std::collections::HashMap<String, String>> = std::sync::Mutex::new(std::collections::HashMap::new());
-}
-
-fn set_secure_token(key: &str, token: &str) -> Result<(), ApiError> {
-    #[cfg(test)]
-    {
-        MOCK_KEYRING.with(|m| {
-            m.lock().unwrap().insert(key.to_string(), token.to_string());
-        });
-        Ok(())
-    }
-    #[cfg(not(test))]
-    {
-        let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
-        entry
-            .set_password(token)
-            .map_err(|e| ApiError::KeychainError(format!("Keyring store failed: {}", e)))?;
-        Ok(())
-    }
-}
-
-fn get_secure_token(key: &str) -> Result<String, ApiError> {
-    #[cfg(test)]
-    {
-        MOCK_KEYRING.with(|m| {
-            m.lock()
-                .unwrap()
-                .get(key)
-                .cloned()
-                .ok_or_else(|| ApiError::KeychainError("Token not found in mock keyring".to_string()))
-        })
-    }
-    #[cfg(not(test))]
-    {
-        let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
-        entry
-            .get_password()
-            .map_err(|e| ApiError::KeychainError(format!("Keyring retrieve failed: {}", e)))
-    }
-}
-
-#[allow(dead_code)]
-fn delete_secure_token(key: &str) -> Result<(), ApiError> {
-    #[cfg(test)]
-    {
-        MOCK_KEYRING.with(|m| {
-            m.lock().unwrap().remove(key);
-        });
-        Ok(())
-    }
-    #[cfg(not(test))]
-    {
-        let entry = Entry::new("agent-erp-auth", key)
-            .map_err(|e| ApiError::KeychainError(format!("Keyring init failed: {}", e)))?;
-        let _ = entry.delete_password();
-        Ok(())
-    }
-}
-
 fn uuid_like_id() -> String {
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -159,7 +218,8 @@ fn uuid_like_id() -> String {
 }
 
 // REST call to real TPS2
-async fn call_real_tps2(
+async fn call_real_tps2<S: TokenStore>(
+    token_store: &S,
     base_url: &str,
     method: &str,
     path: &str,
@@ -181,8 +241,8 @@ async fn call_real_tps2(
         }
     };
 
-    if let Ok(token) = get_secure_token("access_token") {
-        req = req.bearer_auth(token);
+    if let Ok(Some(pair)) = token_store.load() {
+        req = req.bearer_auth(pair.access_token);
     }
 
     let res = req
@@ -219,8 +279,9 @@ async fn call_real_tps2(
 }
 
 // Local mock dispatch handling
-async fn mock_dispatch<R: tauri::Runtime>(
+async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
+    token_store: &S,
     method: &str,
     path: &str,
     body: &Value,
@@ -423,7 +484,10 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_id parameter".to_string()))?;
 
-            let token = get_secure_token("access_token")?;
+            let pair = token_store
+                .load()?
+                .ok_or(ApiError::InvalidCredentials)?;
+            let token = pair.access_token;
 
             // Retrieve user from current session
             let mut stmt = conn
@@ -475,7 +539,10 @@ async fn mock_dispatch<R: tauri::Runtime>(
                 .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
             let tax_id = body.get("tax_id").and_then(|v| v.as_str());
 
-            let token = get_secure_token("access_token")?;
+            let pair = token_store
+                .load()?
+                .ok_or(ApiError::InvalidCredentials)?;
+            let token = pair.access_token;
 
             // Retrieve user from current session
             let mut stmt = conn
@@ -539,8 +606,8 @@ async fn mock_dispatch<R: tauri::Runtime>(
         }
 
         ("POST", "/v1/auth/logout") => {
-            if let Ok(token) = get_secure_token("access_token") {
-                let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&token]);
+            if let Ok(Some(pair)) = token_store.load() {
+                let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&pair.access_token]);
             }
             Ok(json!({}))
         }
@@ -554,8 +621,9 @@ async fn mock_dispatch<R: tauri::Runtime>(
     }
 }
 
-pub(crate) async fn execute_api_call<R: tauri::Runtime>(
+pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
+    token_store: &S,
     method: &str,
     path: &str,
     body: &Value,
@@ -563,45 +631,41 @@ pub(crate) async fn execute_api_call<R: tauri::Runtime>(
     let base_url = env::var("TPS2_BASE_URL").ok();
 
     let response_result = match base_url {
-        Some(url) => call_real_tps2(&url, method, path, body).await,
-        None => mock_dispatch(app_handle, method, path, body).await,
+        Some(url) => call_real_tps2(token_store, &url, method, path, body).await,
+        None => mock_dispatch(app_handle, token_store, method, path, body).await,
     };
 
     match response_result {
         Ok(mut response_val) => {
             if path == "/v1/auth/logout" {
-                let _ = delete_secure_token("access_token");
-                let _ = delete_secure_token("refresh_token");
+                let _ = token_store.clear();
             } else if let Some(obj) = response_val.as_object_mut() {
-                if let Some(access_token_val) = obj.remove("access_token") {
-                    if let Some(access_token) = access_token_val.as_str() {
-                        set_secure_token("access_token", access_token)?;
-                    }
-                }
-                if let Some(refresh_token_val) = obj.remove("refresh_token") {
-                    if let Some(refresh_token) = refresh_token_val.as_str() {
-                        set_secure_token("refresh_token", refresh_token)?;
-                    }
+                let access_opt = obj.remove("access_token").and_then(|v| v.as_str().map(String::from));
+                let refresh_opt = obj.remove("refresh_token").and_then(|v| v.as_str().map(String::from));
+
+                if let Some(access) = access_opt {
+                    let refresh = refresh_opt.as_deref().unwrap_or("");
+                    token_store.save(&access, refresh)?;
                 }
             }
             Ok(response_val)
         }
         Err(err) => {
             if path != "/v1/auth/login" && err == ApiError::InvalidCredentials {
-                let _ = delete_secure_token("access_token");
-                let _ = delete_secure_token("refresh_token");
+                let _ = token_store.clear();
             }
             Err(err)
         }
     }
 }
 
-pub(crate) async fn execute_get_auth_status<R: tauri::Runtime>(
+pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
+    token_store: &S,
 ) -> Result<Value, ApiError> {
-    let token = match get_secure_token("access_token") {
-        Ok(t) => t,
-        Err(_) => {
+    let token = match token_store.load() {
+        Ok(Some(pair)) => pair.access_token,
+        _ => {
             return Ok(json!({
                 "status": "unauthenticated",
                 "user": null,
@@ -694,18 +758,18 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime>(
     }
 }
 
-pub(crate) async fn execute_logout<R: tauri::Runtime>(
+pub(crate) async fn execute_logout<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
+    token_store: &S,
 ) -> Result<(), ApiError> {
-    if let Ok(token) = get_secure_token("access_token") {
+    if let Ok(Some(pair)) = token_store.load() {
         let db_path = crate::get_db_path(app_handle);
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&token]);
+            let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&pair.access_token]);
         }
     }
 
-    let _ = delete_secure_token("access_token");
-    let _ = delete_secure_token("refresh_token");
+    let _ = token_store.clear();
     Ok(())
 }
 
@@ -716,7 +780,8 @@ pub async fn api_call<R: tauri::Runtime>(
     path: String,
     body: Value,
 ) -> Result<Value, ApiErrorPayload> {
-    execute_api_call(&app_handle, &method, &path, &body)
+    let token_store = KeyringTokenStore::new();
+    execute_api_call(&app_handle, &token_store, &method, &path, &body)
         .await
         .map_err(ApiErrorPayload::from)
 }
@@ -725,7 +790,8 @@ pub async fn api_call<R: tauri::Runtime>(
 pub async fn get_auth_status<R: tauri::Runtime>(
     app_handle: tauri::AppHandle<R>,
 ) -> Result<Value, ApiErrorPayload> {
-    execute_get_auth_status(&app_handle)
+    let token_store = KeyringTokenStore::new();
+    execute_get_auth_status(&app_handle, &token_store)
         .await
         .map_err(ApiErrorPayload::from)
 }
@@ -734,7 +800,8 @@ pub async fn get_auth_status<R: tauri::Runtime>(
 pub async fn logout<R: tauri::Runtime>(
     app_handle: tauri::AppHandle<R>,
 ) -> Result<(), ApiErrorPayload> {
-    execute_logout(&app_handle)
+    let token_store = KeyringTokenStore::new();
+    execute_logout(&app_handle, &token_store)
         .await
         .map_err(ApiErrorPayload::from)
 }
@@ -817,8 +884,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_login_success() {
-        // Given: setup user in test database
+        // Given: setup user in test database and in-memory token store
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -836,6 +904,7 @@ mod tests {
         // When: user logs in with valid credentials
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/login",
             &req_body,
@@ -861,16 +930,17 @@ mod tests {
         assert!(res_val.get("access_token").is_none());
         assert!(res_val.get("refresh_token").is_none());
 
-        // Validate token actually stored in keyring
-        let token = get_secure_token("access_token");
-        assert!(token.is_ok());
-        assert_eq!(token.unwrap(), "mock-token-u1");
+        // Validate token actually stored in token_store
+        let pair = token_store.load().unwrap();
+        assert!(pair.is_some());
+        assert_eq!(pair.unwrap().access_token, "mock-token-u1");
     }
 
     #[tokio::test]
     async fn test_login_invalid_credentials() {
-        // Given: setup user in test database
+        // Given: setup user in test database and in-memory token store
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -888,6 +958,7 @@ mod tests {
         // When: calling internal execute_api_call with wrong password
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/login",
             &req_body,
@@ -918,8 +989,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_tenant_success() {
-        // Given: setup fresh test database
+        // Given: setup fresh test database and in-memory token store
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
             "tenant_name": "Test Tenant",
@@ -932,6 +1004,7 @@ mod tests {
         // When: registering new tenant
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/register-tenant",
             &req_body,
@@ -965,13 +1038,14 @@ mod tests {
         // Verify tokens are stored but not returned
         assert!(res_val.get("access_token").is_none());
         assert!(res_val.get("refresh_token").is_none());
-        assert!(get_secure_token("access_token").is_ok());
+        assert!(token_store.load().unwrap().is_some());
     }
 
     #[tokio::test]
     async fn test_register_tenant_email_taken() {
         // Given: database with existing email
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -992,6 +1066,7 @@ mod tests {
         // When: registering with duplicate email
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/register-tenant",
             &req_body,
@@ -1006,6 +1081,7 @@ mod tests {
     async fn test_register_tenant_weak_password() {
         // Given: fresh database
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
             "tenant_name": "Test Tenant",
@@ -1018,6 +1094,7 @@ mod tests {
         // When: registering with weak password
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/register-tenant",
             &req_body,
@@ -1032,6 +1109,7 @@ mod tests {
     async fn test_token_never_returned_to_js() {
         // Given: fresh database
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
 
         let req_body = json!({
             "tenant_name": "Test Tenant",
@@ -1044,6 +1122,7 @@ mod tests {
         // When: registering tenant
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/register-tenant",
             &req_body,
@@ -1060,8 +1139,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_select_tenant_success() {
-        // Given: Seed user, tenant, member relation, and active session
+        // Given: Seed user, tenant, member relation, active session and token in token_store
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1086,7 +1166,7 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-u1").unwrap();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         // When: Perform select-tenant call
         let req_body = json!({
@@ -1094,6 +1174,7 @@ mod tests {
         });
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/select-tenant",
             &req_body,
@@ -1108,15 +1189,16 @@ mod tests {
             "authenticated"
         );
 
-        // Verify tokens are updated and saved in keyring
-        let new_token = get_secure_token("access_token").unwrap();
-        assert_eq!(new_token, "mock-scoped-token-u1");
+        // Verify tokens are updated and saved in token_store
+        let pair = token_store.load().unwrap().unwrap();
+        assert_eq!(pair.access_token, "mock-scoped-token-u1");
     }
 
     #[tokio::test]
     async fn test_select_tenant_not_member() {
         // Given: Seed user and session, but NO user_tenant relationship to tnt2
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1131,7 +1213,7 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-u1").unwrap();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         let req_body = json!({
             "tenant_id": "tnt2"
@@ -1140,6 +1222,7 @@ mod tests {
         // When: selecting tenant that user does not belong to
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/select-tenant",
             &req_body,
@@ -1154,6 +1237,7 @@ mod tests {
     async fn test_login_multi_tenant_requires_selection() {
         // Given: user with 2 tenants
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1192,6 +1276,7 @@ mod tests {
         });
         let login_res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/login",
             &req_body,
@@ -1200,7 +1285,7 @@ mod tests {
         assert!(login_res.is_ok());
 
         // Then: Get auth status should indicate needs_tenant_selection
-        let status_res = execute_get_auth_status(&handle).await;
+        let status_res = execute_get_auth_status(&handle, &token_store).await;
         assert!(status_res.is_ok());
 
         let status_val = status_res.unwrap();
@@ -1219,6 +1304,7 @@ mod tests {
     async fn test_create_tenant_success() {
         // Given: Seed user and active session without active_tenant_id
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1233,7 +1319,7 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-u1").unwrap();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         let req_body = json!({
             "tenant_name": "New Tenant",
@@ -1245,6 +1331,7 @@ mod tests {
         // When: creating new tenant
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/create-tenant",
             &req_body,
@@ -1263,11 +1350,11 @@ mod tests {
         assert!(res_val.get("company_id").is_some());
 
         // Verify session was updated to the new scoped token and has active_tenant_id set
-        let active_token = get_secure_token("access_token").unwrap();
-        assert_eq!(active_token, "mock-scoped-token-u1");
+        let pair = token_store.load().unwrap().unwrap();
+        assert_eq!(pair.access_token, "mock-scoped-token-u1");
 
         // Verify status is authenticated
-        let status_res = execute_get_auth_status(&handle).await.unwrap();
+        let status_res = execute_get_auth_status(&handle, &token_store).await.unwrap();
         assert_eq!(
             status_res.get("status").unwrap().as_str().unwrap(),
             "authenticated"
@@ -1288,6 +1375,7 @@ mod tests {
     async fn test_create_tenant_duplicate_code() {
         // Given: Seed user, existing tenant with same code, and active session
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1307,7 +1395,7 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-u1").unwrap();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         let req_body = json!({
             "tenant_name": "New Tenant",
@@ -1319,6 +1407,7 @@ mod tests {
         // When: creating tenant with duplicate code
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/create-tenant",
             &req_body,
@@ -1330,31 +1419,37 @@ mod tests {
     }
 
     #[test]
-    fn test_keychain_save_get_clear_roundtrip() {
-        // Given: test key and password
-        let key = "test_key";
-        let password = "test_password_value";
+    fn test_in_memory_token_store_save_load_clear_roundtrip() {
+        // Given: fresh InMemoryTokenStore and tokens
+        let store = InMemoryTokenStore::new();
+        let access = "test_access_token_value";
+        let refresh = "test_refresh_token_value";
 
-        let _ = delete_secure_token(key);
+        // When: initially loading
+        let initial = store.load().unwrap();
+        // Then: should be None
+        assert_eq!(initial, None);
 
-        // When: saving the password
-        set_secure_token(key, password).unwrap();
+        // When: saving token pair
+        store.save(access, refresh).unwrap();
 
-        // Then: we should retrieve the same password
-        let retrieved = get_secure_token(key).unwrap();
-        assert_eq!(retrieved, password);
+        // Then: we should retrieve the same token pair
+        let retrieved = store.load().unwrap().unwrap();
+        assert_eq!(retrieved.access_token, access);
+        assert_eq!(retrieved.refresh_token, Some(refresh.to_string()));
 
-        // When: deleting the password
-        delete_secure_token(key).unwrap();
+        // When: clearing the store
+        store.clear().unwrap();
 
-        // Then: retrieving it should fail with KeychainError
-        assert!(get_secure_token(key).is_err());
+        // Then: load should return None
+        assert_eq!(store.load().unwrap(), None);
     }
 
     #[tokio::test]
     async fn test_api_call_logout_success() {
-        // Given: setup test database with a user and active session
+        // Given: setup test database with a user, active session and in-memory tokens
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1370,12 +1465,12 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-u1").unwrap();
-        set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         // When: calling execute_api_call with logout path
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/logout",
             &json!({}),
@@ -1392,21 +1487,21 @@ mod tests {
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(count, 0);
 
-        // And: Keychain tokens should be deleted
-        assert!(get_secure_token("access_token").is_err());
-        assert!(get_secure_token("refresh_token").is_err());
+        // And: Tokens should be cleared in token_store
+        assert_eq!(token_store.load().unwrap(), None);
     }
 
     #[tokio::test]
     async fn test_api_call_expired_token_clears_keychain() {
-        // Given: mock token stored in Keychain
+        // Given: mock token stored in token_store
         let handle = setup_test_db();
-        set_secure_token("access_token", "mock-token-u1").unwrap();
-        set_secure_token("refresh_token", "mock-refresh-u1").unwrap();
+        let token_store = InMemoryTokenStore::new();
+        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
 
         // When: calling execute_api_call with an endpoint that returns invalid credentials
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/test/expire",
             &json!({}),
@@ -1416,21 +1511,21 @@ mod tests {
         // Then: returns ApiError::InvalidCredentials
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
-        // And: Keychain tokens should be automatically cleared
-        assert!(get_secure_token("access_token").is_err());
-        assert!(get_secure_token("refresh_token").is_err());
+        // And: Tokens should be automatically cleared
+        assert_eq!(token_store.load().unwrap(), None);
     }
 
     #[tokio::test]
     async fn test_api_call_login_failure_does_not_clear_keychain() {
         // Given: setup test database, seed previous active token
         let handle = setup_test_db();
-        set_secure_token("access_token", "mock-token-prev").unwrap();
-        set_secure_token("refresh_token", "mock-refresh-prev").unwrap();
+        let token_store = InMemoryTokenStore::new();
+        token_store.save("mock-token-prev", "mock-refresh-prev").unwrap();
 
         // When: login fails with invalid credentials
         let res = execute_api_call(
             &handle,
+            &token_store,
             "POST",
             "/v1/auth/login",
             &json!({
@@ -1444,11 +1539,9 @@ mod tests {
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
         // And: the previous token should STILL exist (not cleared)
-        assert_eq!(get_secure_token("access_token").unwrap(), "mock-token-prev");
-        assert_eq!(
-            get_secure_token("refresh_token").unwrap(),
-            "mock-refresh-prev"
-        );
+        let pair = token_store.load().unwrap().unwrap();
+        assert_eq!(pair.access_token, "mock-token-prev");
+        assert_eq!(pair.refresh_token, Some("mock-refresh-prev".to_string()));
     }
 
     // ==========================================
@@ -1457,12 +1550,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_auth_status_unauthenticated() {
-        // Given: no token in Keychain
+        // Given: no token in token_store
         let handle = setup_test_db();
-        let _ = delete_secure_token("access_token");
+        let token_store = InMemoryTokenStore::new();
 
         // When: checking auth status
-        let res = execute_get_auth_status(&handle).await;
+        let res = execute_get_auth_status(&handle, &token_store).await;
 
         // Then: should return unauthenticated
         assert!(res.is_ok());
@@ -1476,6 +1569,7 @@ mod tests {
     async fn test_get_auth_status_needs_tenant_creation() {
         // Given: user logged in with session but has 0 tenants assigned
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1491,10 +1585,10 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-unew").unwrap();
+        token_store.save("mock-token-unew", "").unwrap();
 
         // When: checking auth status
-        let res = execute_get_auth_status(&handle).await;
+        let res = execute_get_auth_status(&handle, &token_store).await;
 
         // Then: should return needs_tenant_creation
         assert!(res.is_ok());
@@ -1508,6 +1602,7 @@ mod tests {
     async fn test_get_auth_status_needs_tenant_selection() {
         // Given: user with multiple tenants but active_tenant_id is NULL
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1535,10 +1630,10 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-umulti").unwrap();
+        token_store.save("mock-token-umulti", "").unwrap();
 
         // When: checking auth status
-        let res = execute_get_auth_status(&handle).await;
+        let res = execute_get_auth_status(&handle, &token_store).await;
 
         // Then: should return needs_tenant_selection
         assert!(res.is_ok());
@@ -1552,6 +1647,7 @@ mod tests {
     async fn test_get_auth_status_authenticated() {
         // Given: user with active_tenant_id selected in session
         let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
         let db_path = crate::get_db_path(&handle);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
 
@@ -1579,10 +1675,10 @@ mod tests {
         )
         .unwrap();
 
-        set_secure_token("access_token", "mock-token-uauth").unwrap();
+        token_store.save("mock-token-uauth", "").unwrap();
 
         // When: checking auth status
-        let res = execute_get_auth_status(&handle).await;
+        let res = execute_get_auth_status(&handle, &token_store).await;
 
         // Then: should return authenticated with activeTenant populated
         assert!(res.is_ok());
