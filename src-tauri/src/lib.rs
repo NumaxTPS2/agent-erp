@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tauri::http::Response;
 use tauri::{AppHandle, Emitter, Manager};
 
-mod auth;
+pub mod auth;
 mod downloader;
 
 #[cfg(test)]
