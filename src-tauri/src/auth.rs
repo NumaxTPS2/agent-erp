@@ -1,3 +1,4 @@
+use crate::tps2_types::{V1LoginRequest, V1LoginResponse, V1TenantInfo};
 use keyring::Entry;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -292,13 +293,17 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
 
     match (method, path) {
         ("POST", "/v1/auth/login") => {
-            let email = body
-                .get("email")
-                .and_then(|v| v.as_str())
+            let req: V1LoginRequest = serde_json::from_value(body.clone())
+                .map_err(|e| ApiError::InvalidArgument(format!("Invalid login request: {}", e)))?;
+            let email = req
+                .email
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
                 .ok_or_else(|| ApiError::InvalidArgument("Missing email parameter".to_string()))?;
-            let password = body
-                .get("password")
-                .and_then(|v| v.as_str())
+            let password = req
+                .password
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
                 .ok_or_else(|| ApiError::InvalidArgument("Missing password parameter".to_string()))?;
 
             // Retrieve user credentials
@@ -333,12 +338,12 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
 
                     let tenant_rows = stmt_tenants
                         .query_map([&id], |row| {
-                            Ok(json!({
-                                "id": row.get::<_, String>(0)?,
-                                "code": row.get::<_, String>(1)?,
-                                "name": row.get::<_, String>(2)?,
-                                "role": row.get::<_, String>(3)?
-                            }))
+                            Ok(V1TenantInfo {
+                                id: Some(row.get::<_, String>(0)?),
+                                code: Some(row.get::<_, String>(1)?),
+                                name: Some(row.get::<_, String>(2)?),
+                                role: Some(row.get::<_, String>(3)?),
+                            })
                         })
                         .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
 
@@ -353,8 +358,7 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                     let active_tenant_id = if tenants.len() == 1 {
                         tenants
                             .first()
-                            .and_then(|t| t.get("id"))
-                            .and_then(|v| v.as_str())
+                            .and_then(|t| t.id.as_deref())
                     } else {
                         None
                     };
@@ -376,16 +380,18 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                         db_name
                     };
 
-                    Ok(json!({
-                        "access_token": mock_token,
-                        "refresh_token": format!("mock-refresh-{}", id),
-                        "user": {
-                            "id": id,
-                            "email": db_email,
-                            "display_name": display_name
-                        },
-                        "tenants": tenants
-                    }))
+                    let login_resp = V1LoginResponse {
+                        access_token: Some(mock_token),
+                        refresh_token: Some(format!("mock-refresh-{}", id)),
+                        user_id: Some(id),
+                        email: Some(db_email),
+                        display_name: Some(display_name),
+                        tenants,
+                        ..Default::default()
+                    };
+
+                    serde_json::to_value(login_resp)
+                        .map_err(|e| ApiError::DatabaseError(format!("Serialization failed: {}", e)))
                 }
                 Err(_) => Err(ApiError::InvalidCredentials),
             }
@@ -657,8 +663,14 @@ pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
             if path == "/v1/auth/logout" {
                 let _ = token_store.clear();
             } else if let Some(obj) = response_val.as_object_mut() {
-                let access_opt = obj.remove("access_token").and_then(|v| v.as_str().map(String::from));
-                let refresh_opt = obj.remove("refresh_token").and_then(|v| v.as_str().map(String::from));
+                let access_opt = obj
+                    .remove("access_token")
+                    .or_else(|| obj.remove("accessToken"))
+                    .and_then(|v| v.as_str().map(String::from));
+                let refresh_opt = obj
+                    .remove("refresh_token")
+                    .or_else(|| obj.remove("refreshToken"))
+                    .and_then(|v| v.as_str().map(String::from));
 
                 if let Some(access) = access_opt {
                     let refresh = refresh_opt.as_deref().unwrap_or("");
@@ -923,10 +935,12 @@ mod tests {
         )
         .unwrap();
 
-        let req_body = json!({
-            "email": "test@example.com",
-            "password": "password123"
-        });
+        let req_body = serde_json::to_value(V1LoginRequest {
+            email: Some("test@example.com".to_string()),
+            password: Some("password123".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
 
         // When: user logs in with valid credentials
         let res = execute_api_call(
@@ -942,30 +956,16 @@ mod tests {
         assert!(res.is_ok());
 
         let res_val = res.unwrap();
-        assert_eq!(
-            res_val
-                .get("user")
-                .unwrap()
-                .get("email")
-                .unwrap()
-                .as_str()
-                .unwrap(),
-            "test@example.com"
-        );
-        assert_eq!(
-            res_val
-                .get("user")
-                .unwrap()
-                .get("display_name")
-                .unwrap()
-                .as_str()
-                .unwrap(),
-            "Test Admin"
-        );
+        let login_resp: V1LoginResponse = serde_json::from_value(res_val.clone()).unwrap();
+        assert_eq!(login_resp.email.as_deref(), Some("test@example.com"));
+        assert_eq!(login_resp.display_name.as_deref(), Some("Test Admin"));
+        assert_eq!(login_resp.user_id.as_deref(), Some("u1"));
 
         // Ensure access_token/refresh_token was removed from response
         assert!(res_val.get("access_token").is_none());
+        assert!(res_val.get("accessToken").is_none());
         assert!(res_val.get("refresh_token").is_none());
+        assert!(res_val.get("refreshToken").is_none());
 
         // Validate token actually stored in token_store
         let pair = token_store.load().unwrap();
@@ -987,10 +987,12 @@ mod tests {
         )
         .unwrap();
 
-        let req_body = json!({
-            "email": "noname@example.com",
-            "password": "password123"
-        });
+        let req_body = serde_json::to_value(V1LoginRequest {
+            email: Some("noname@example.com".to_string()),
+            password: Some("password123".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
 
         // When: user logs in
         let res = execute_api_call(
@@ -1005,16 +1007,8 @@ mod tests {
         // Then: display_name falls back to email
         assert!(res.is_ok());
         let res_val = res.unwrap();
-        assert_eq!(
-            res_val
-                .get("user")
-                .unwrap()
-                .get("display_name")
-                .unwrap()
-                .as_str()
-                .unwrap(),
-            "noname@example.com"
-        );
+        let login_resp: V1LoginResponse = serde_json::from_value(res_val).unwrap();
+        assert_eq!(login_resp.display_name.as_deref(), Some("noname@example.com"));
     }
 
     #[tokio::test]
@@ -1063,9 +1057,46 @@ mod tests {
             ipc_res.unwrap_err(),
             ApiErrorPayload {
                 code: "IAM_ERR_INVALID_CREDENTIALS".to_string(),
-                message: "invalid credentials".to_string()
+                message: "invalid credentials".to_string(),
             }
         );
+    }
+    #[tokio::test]
+    async fn test_login_missing_parameters() {
+        // Given: setup user in test database and in-memory token store
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+
+        // When: calling login with missing email
+        let res_no_email = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/login",
+            &json!({
+                "password": "password123"
+            }),
+        )
+        .await;
+
+        // Then: returns InvalidArgument error
+        assert!(matches!(res_no_email.unwrap_err(), ApiError::InvalidArgument(_)));
+
+        // When: calling login with empty email
+        let res_empty_email = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/login",
+            &json!({
+                "email": "   ",
+                "password": "password123"
+            }),
+        )
+        .await;
+
+        // Then: returns InvalidArgument error
+        assert!(matches!(res_empty_email.unwrap_err(), ApiError::InvalidArgument(_)));
     }
 
     #[tokio::test]
