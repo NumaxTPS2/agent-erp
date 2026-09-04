@@ -4,6 +4,7 @@ use tauri::http::Response;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub mod auth;
+pub mod tps2_types;
 mod downloader;
 
 #[cfg(test)]
