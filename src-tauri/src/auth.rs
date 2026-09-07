@@ -839,8 +839,8 @@ pub(crate) async fn execute_logout<R: tauri::Runtime, S: TokenStore>(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn api_call(
-    app_handle: tauri::AppHandle,
+pub async fn api_call<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
     method: String,
     path: String,
     body: Value,
@@ -853,8 +853,8 @@ pub async fn api_call(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_auth_status(
-    app_handle: tauri::AppHandle,
+pub async fn get_auth_status<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
 ) -> Result<AuthStatusResponse, ApiErrorPayload> {
     let token_store = KeyringTokenStore::new();
     execute_get_auth_status(&app_handle, &token_store)
@@ -864,8 +864,8 @@ pub async fn get_auth_status(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn logout(
-    app_handle: tauri::AppHandle,
+pub async fn logout<R: tauri::Runtime>(
+    app_handle: tauri::AppHandle<R>,
 ) -> Result<LogoutResponse, ApiErrorPayload> {
     let token_store = KeyringTokenStore::new();
     execute_logout(&app_handle, &token_store)
@@ -1073,12 +1073,18 @@ mod tests {
         // Then: returns ApiError::InvalidCredentials enum variant
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
-        // And When: converting to ApiErrorPayload across IPC delivery layer
-        let ipc_err = ApiErrorPayload::from(ApiError::InvalidCredentials);
+        // And When: calling tauri command api_call across IPC boundary
+        let ipc_res = api_call(
+            handle,
+            "POST".to_string(),
+            "/v1/auth/login".to_string(),
+            req_body,
+        )
+        .await;
 
         // Then: returns ApiErrorPayload with IAM_ERR_INVALID_CREDENTIALS
         assert_eq!(
-            ipc_err,
+            ipc_res.unwrap_err(),
             ApiErrorPayload {
                 code: "IAM_ERR_INVALID_CREDENTIALS".to_string(),
                 message: "invalid credentials".to_string(),
@@ -1849,13 +1855,31 @@ mod tests {
         assert_eq!(val.active_tenant.unwrap().code, "code_act");
     }
 
+    #[tokio::test]
+    async fn test_command_get_auth_status_delivery_boundary() {
+        let handle = setup_test_db();
+        let res = get_auth_status(handle).await;
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.status, "unauthenticated");
+    }
+
+    #[tokio::test]
+    async fn test_command_logout_delivery_boundary() {
+        let handle = setup_test_db();
+        let res = logout(handle).await;
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert!(val.success);
+    }
+
     #[test]
     fn test_export_specta_bindings() {
         let builder = tauri_specta::Builder::<tauri::Wry>::new()
             .commands(tauri_specta::collect_commands![
-                api_call,
-                get_auth_status,
-                logout
+                api_call::<tauri::Wry>,
+                get_auth_status::<tauri::Wry>,
+                logout::<tauri::Wry>
             ]);
 
         builder
