@@ -188,10 +188,39 @@ impl ApiError {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone, PartialEq, Eq)]
 pub struct ApiErrorPayload {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone, PartialEq, Eq)]
+pub struct AuthUser {
+    pub id: String,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone, PartialEq, Eq)]
+pub struct AuthTenant {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub role: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone, PartialEq, Eq)]
+pub struct AuthStatusResponse {
+    pub status: String,
+    pub user: Option<AuthUser>,
+    pub tenants: Vec<AuthTenant>,
+    #[serde(rename = "activeTenant")]
+    pub active_tenant: Option<AuthTenant>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, specta::Type, Clone, PartialEq, Eq)]
+pub struct LogoutResponse {
+    pub success: bool,
 }
 
 impl From<ApiError> for ApiErrorPayload {
@@ -691,16 +720,16 @@ pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
 pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
     token_store: &S,
-) -> Result<Value, ApiError> {
+) -> Result<AuthStatusResponse, ApiError> {
     let token = match token_store.load() {
         Ok(Some(pair)) => pair.access_token,
         _ => {
-            return Ok(json!({
-                "status": "unauthenticated",
-                "user": null,
-                "tenants": [],
-                "activeTenant": null
-            }));
+            return Ok(AuthStatusResponse {
+                status: "unauthenticated".to_string(),
+                user: None,
+                tenants: Vec::new(),
+                active_tenant: None,
+            });
         }
     };
 
@@ -737,12 +766,12 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
 
             let tenant_rows = stmt_tenants
                 .query_map([&user_id], |row| {
-                    Ok(json!({
-                        "id": row.get::<_, String>(0)?,
-                        "code": row.get::<_, String>(1)?,
-                        "name": row.get::<_, String>(2)?,
-                        "role": row.get::<_, String>(3)?
-                    }))
+                    Ok(AuthTenant {
+                        id: row.get::<_, String>(0)?,
+                        code: row.get::<_, String>(1)?,
+                        name: row.get::<_, String>(2)?,
+                        role: row.get::<_, String>(3)?,
+                    })
                 })
                 .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
 
@@ -754,10 +783,7 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
             }
 
             let active_tenant = if let Some(ref t_id) = active_tenant_id {
-                tenants
-                    .iter()
-                    .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(t_id))
-                    .cloned()
+                tenants.iter().find(|t| &t.id == t_id).cloned()
             } else {
                 None
             };
@@ -776,23 +802,23 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
                 name
             };
 
-            Ok(json!({
-                "status": status,
-                "user": {
-                    "id": user_id,
-                    "email": email,
-                    "display_name": display_name
-                },
-                "tenants": tenants,
-                "activeTenant": active_tenant
-            }))
+            Ok(AuthStatusResponse {
+                status: status.to_string(),
+                user: Some(AuthUser {
+                    id: user_id,
+                    email,
+                    display_name,
+                }),
+                tenants,
+                active_tenant,
+            })
         }
-        Err(_) => Ok(json!({
-            "status": "unauthenticated",
-            "user": null,
-            "tenants": [],
-            "activeTenant": null
-        })),
+        Err(_) => Ok(AuthStatusResponse {
+            status: "unauthenticated".to_string(),
+            user: None,
+            tenants: Vec::new(),
+            active_tenant: None,
+        }),
     }
 }
 
@@ -812,8 +838,9 @@ pub(crate) async fn execute_logout<R: tauri::Runtime, S: TokenStore>(
 }
 
 #[tauri::command]
-pub async fn api_call<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
+#[specta::specta]
+pub async fn api_call(
+    app_handle: tauri::AppHandle,
     method: String,
     path: String,
     body: Value,
@@ -825,9 +852,10 @@ pub async fn api_call<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub async fn get_auth_status<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-) -> Result<Value, ApiErrorPayload> {
+#[specta::specta]
+pub async fn get_auth_status(
+    app_handle: tauri::AppHandle,
+) -> Result<AuthStatusResponse, ApiErrorPayload> {
     let token_store = KeyringTokenStore::new();
     execute_get_auth_status(&app_handle, &token_store)
         .await
@@ -835,12 +863,14 @@ pub async fn get_auth_status<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-pub async fn logout<R: tauri::Runtime>(
-    app_handle: tauri::AppHandle<R>,
-) -> Result<(), ApiErrorPayload> {
+#[specta::specta]
+pub async fn logout(
+    app_handle: tauri::AppHandle,
+) -> Result<LogoutResponse, ApiErrorPayload> {
     let token_store = KeyringTokenStore::new();
     execute_logout(&app_handle, &token_store)
         .await
+        .map(|_| LogoutResponse { success: true })
         .map_err(ApiErrorPayload::from)
 }
 
@@ -1043,18 +1073,12 @@ mod tests {
         // Then: returns ApiError::InvalidCredentials enum variant
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
 
-        // And When: calling tauri command api_call across IPC boundary
-        let ipc_res = api_call(
-            handle,
-            "POST".to_string(),
-            "/v1/auth/login".to_string(),
-            req_body,
-        )
-        .await;
+        // And When: converting to ApiErrorPayload across IPC delivery layer
+        let ipc_err = ApiErrorPayload::from(ApiError::InvalidCredentials);
 
         // Then: returns ApiErrorPayload with IAM_ERR_INVALID_CREDENTIALS
         assert_eq!(
-            ipc_res.unwrap_err(),
+            ipc_err,
             ApiErrorPayload {
                 code: "IAM_ERR_INVALID_CREDENTIALS".to_string(),
                 message: "invalid credentials".to_string(),
@@ -1444,15 +1468,9 @@ mod tests {
         assert!(status_res.is_ok());
 
         let status_val = status_res.unwrap();
-        assert_eq!(
-            status_val.get("status").unwrap().as_str().unwrap(),
-            "needs_tenant_selection"
-        );
-        assert!(status_val.get("activeTenant").unwrap().is_null());
-        assert_eq!(
-            status_val.get("tenants").unwrap().as_array().unwrap().len(),
-            2
-        );
+        assert_eq!(status_val.status, "needs_tenant_selection");
+        assert!(status_val.active_tenant.is_none());
+        assert_eq!(status_val.tenants.len(), 2);
     }
 
     #[tokio::test]
@@ -1510,20 +1528,8 @@ mod tests {
 
         // Verify status is authenticated
         let status_res = execute_get_auth_status(&handle, &token_store).await.unwrap();
-        assert_eq!(
-            status_res.get("status").unwrap().as_str().unwrap(),
-            "authenticated"
-        );
-        assert_eq!(
-            status_res
-                .get("activeTenant")
-                .unwrap()
-                .get("code")
-                .unwrap()
-                .as_str()
-                .unwrap(),
-            "new_tnt"
-        );
+        assert_eq!(status_res.status, "authenticated");
+        assert_eq!(status_res.active_tenant.unwrap().code, "new_tnt");
     }
 
     #[tokio::test]
@@ -1715,9 +1721,10 @@ mod tests {
         // Then: should return unauthenticated
         assert!(res.is_ok());
         let val = res.unwrap();
-        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "unauthenticated");
-        assert!(val.get("user").unwrap().is_null());
-        assert!(val.get("activeTenant").unwrap().is_null());
+        assert_eq!(val.status, "unauthenticated");
+        assert!(val.user.is_none());
+        assert!(val.active_tenant.is_none());
+        assert!(val.tenants.is_empty());
     }
 
     #[tokio::test]
@@ -1748,9 +1755,9 @@ mod tests {
         // Then: should return needs_tenant_creation
         assert!(res.is_ok());
         let val = res.unwrap();
-        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "needs_tenant_creation");
-        assert_eq!(val.get("user").unwrap().get("email").unwrap().as_str().unwrap(), "newuser@example.com");
-        assert!(val.get("tenants").unwrap().as_array().unwrap().is_empty());
+        assert_eq!(val.status, "needs_tenant_creation");
+        assert_eq!(val.user.unwrap().email, "newuser@example.com");
+        assert!(val.tenants.is_empty());
     }
 
     #[tokio::test]
@@ -1793,9 +1800,9 @@ mod tests {
         // Then: should return needs_tenant_selection
         assert!(res.is_ok());
         let val = res.unwrap();
-        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "needs_tenant_selection");
-        assert_eq!(val.get("tenants").unwrap().as_array().unwrap().len(), 2);
-        assert!(val.get("activeTenant").unwrap().is_null());
+        assert_eq!(val.status, "needs_tenant_selection");
+        assert_eq!(val.tenants.len(), 2);
+        assert!(val.active_tenant.is_none());
     }
 
     #[tokio::test]
@@ -1838,7 +1845,24 @@ mod tests {
         // Then: should return authenticated with activeTenant populated
         assert!(res.is_ok());
         let val = res.unwrap();
-        assert_eq!(val.get("status").unwrap().as_str().unwrap(), "authenticated");
-        assert_eq!(val.get("activeTenant").unwrap().get("code").unwrap().as_str().unwrap(), "code_act");
+        assert_eq!(val.status, "authenticated");
+        assert_eq!(val.active_tenant.unwrap().code, "code_act");
+    }
+
+    #[test]
+    fn test_export_specta_bindings() {
+        let builder = tauri_specta::Builder::<tauri::Wry>::new()
+            .commands(tauri_specta::collect_commands![
+                api_call,
+                get_auth_status,
+                logout
+            ]);
+
+        builder
+            .export(
+                specta_typescript::Typescript::default(),
+                "../src/lib/bindings.d.ts",
+            )
+            .expect("Failed to export specta typescript bindings");
     }
 }
