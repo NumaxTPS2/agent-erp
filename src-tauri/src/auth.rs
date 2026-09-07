@@ -247,6 +247,188 @@ fn uuid_like_id() -> String {
     format!("{:x}", ts)
 }
 
+fn extract_error_reason(json: &Value) -> Option<&str> {
+    // 1. Direct "reason" at root level
+    if let Some(r) = json.get("reason").and_then(|v| v.as_str()) {
+        return Some(r);
+    }
+
+    // 2. Direct "details" array (gRPC-gateway / google.rpc.Status)
+    if let Some(details) = json.get("details").and_then(|v| v.as_array()) {
+        for item in details {
+            if let Some(r) = item.get("reason").and_then(|v| v.as_str()) {
+                return Some(r);
+            }
+        }
+    }
+
+    // 3. Nested under "error" object
+    if let Some(error_obj) = json.get("error").and_then(|v| v.as_object()) {
+        if let Some(r) = error_obj.get("reason").and_then(|v| v.as_str()) {
+            return Some(r);
+        }
+        if let Some(details) = error_obj.get("details").and_then(|v| v.as_array()) {
+            for item in details {
+                if let Some(r) = item.get("reason").and_then(|v| v.as_str()) {
+                    return Some(r);
+                }
+            }
+        }
+    }
+
+    // 4. "error_code" or "code" string representation
+    if let Some(c) = json.get("error_code").and_then(|v| v.as_str()) {
+        return Some(c);
+    }
+    if let Some(c) = json.get("code").and_then(|v| v.as_str()) {
+        return Some(c);
+    }
+
+    None
+}
+
+fn parse_http_response(status: reqwest::StatusCode, text: &str) -> Result<Value, ApiError> {
+    let json_res: Option<Value> = serde_json::from_str(text).ok();
+
+    if !status.is_success() {
+        if let Some(ref j) = json_res {
+            if let Some(reason) = extract_error_reason(j) {
+                return Err(ApiError::from_reason(reason));
+            }
+        }
+
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::InvalidCredentials);
+        }
+
+        if let Some(ref j) = json_res {
+            if let Some(msg) = j.get("message").and_then(|v| v.as_str()) {
+                return Err(ApiError::Unknown(msg.to_string()));
+            }
+            if let Some(msg) = j
+                .get("error")
+                .and_then(|v| v.get("message"))
+                .and_then(|v| v.as_str())
+            {
+                return Err(ApiError::Unknown(msg.to_string()));
+            }
+        }
+
+        return Err(ApiError::Unknown(format!("HTTP {}", status)));
+    }
+
+    let json_val = json_res
+        .ok_or_else(|| ApiError::NetworkError("Empty or invalid JSON response".to_string()))?;
+    Ok(json_val)
+}
+
+fn parse_profile_response(profile_val: &Value) -> AuthStatusResponse {
+    let user_id = profile_val
+        .get("userId")
+        .or_else(|| profile_val.get("user_id"))
+        .or_else(|| profile_val.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let email = profile_val
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let display_name = profile_val
+        .get("displayName")
+        .or_else(|| profile_val.get("display_name"))
+        .or_else(|| profile_val.get("name"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| email.clone());
+
+    let mut tenants = Vec::new();
+    if let Some(arr) = profile_val.get("tenants").and_then(|v| v.as_array()) {
+        for item in arr {
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let code = item
+                .get("code")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let role = item
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            tenants.push(AuthTenant {
+                id,
+                code,
+                name,
+                role,
+            });
+        }
+    }
+
+    let mut active_tenant = None;
+    if let Some(act) = profile_val
+        .get("activeTenant")
+        .or_else(|| profile_val.get("active_tenant"))
+    {
+        if let (Some(id), Some(code), Some(name)) = (
+            act.get("id").and_then(|v| v.as_str()),
+            act.get("code").and_then(|v| v.as_str()),
+            act.get("name").and_then(|v| v.as_str()),
+        ) {
+            let role = act
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            active_tenant = Some(AuthTenant {
+                id: id.to_string(),
+                code: code.to_string(),
+                name: name.to_string(),
+                role,
+            });
+        }
+    } else if tenants.len() == 1 {
+        active_tenant = tenants.first().cloned();
+    }
+
+    let status = if let Some(st) = profile_val.get("status").and_then(|v| v.as_str()) {
+        st.to_string()
+    } else if tenants.is_empty() {
+        "needs_tenant_creation".to_string()
+    } else if active_tenant.is_none() {
+        "needs_tenant_selection".to_string()
+    } else {
+        "authenticated".to_string()
+    };
+
+    let user = if user_id.is_empty() && email.is_empty() {
+        None
+    } else {
+        Some(AuthUser {
+            id: user_id,
+            email,
+            display_name,
+        })
+    };
+
+    AuthStatusResponse {
+        status,
+        user,
+        tenants,
+        active_tenant,
+    }
+}
+
 // REST call to real TPS2
 async fn call_real_tps2<S: TokenStore>(
     token_store: &S,
@@ -260,9 +442,27 @@ async fn call_real_tps2<S: TokenStore>(
 
     let mut req = match method {
         "GET" => client.get(&url),
-        "POST" => client.post(&url).json(body),
-        "PUT" => client.put(&url).json(body),
-        "DELETE" => client.delete(&url),
+        "POST" => {
+            if body.is_null() {
+                client.post(&url)
+            } else {
+                client.post(&url).json(body)
+            }
+        }
+        "PUT" => {
+            if body.is_null() {
+                client.put(&url)
+            } else {
+                client.put(&url).json(body)
+            }
+        }
+        "DELETE" => {
+            if body.is_null() {
+                client.delete(&url)
+            } else {
+                client.delete(&url).json(body)
+            }
+        }
         _ => {
             return Err(ApiError::InvalidArgument(format!(
                 "Unsupported HTTP method: {}",
@@ -272,7 +472,9 @@ async fn call_real_tps2<S: TokenStore>(
     };
 
     if let Ok(Some(pair)) = token_store.load() {
-        req = req.bearer_auth(pair.access_token);
+        if !pair.access_token.trim().is_empty() {
+            req = req.bearer_auth(pair.access_token);
+        }
     }
 
     let res = req
@@ -286,26 +488,7 @@ async fn call_real_tps2<S: TokenStore>(
         .await
         .map_err(|e| ApiError::NetworkError(format!("Failed to read response body: {}", e)))?;
 
-    let json_res: Option<Value> = serde_json::from_str(&text).ok();
-
-    if !status.is_success() {
-        let err_reason = json_res
-            .as_ref()
-            .and_then(|v| v.get("reason"))
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                if status == reqwest::StatusCode::UNAUTHORIZED {
-                    "IAM_ERR_INVALID_CREDENTIALS"
-                } else {
-                    "UNKNOWN_ERROR"
-                }
-            });
-        return Err(ApiError::from_reason(err_reason));
-    }
-
-    let json_val = json_res
-        .ok_or_else(|| ApiError::NetworkError("Empty or invalid JSON response".to_string()))?;
-    Ok(json_val)
+    parse_http_response(status, &text)
 }
 
 // Local mock dispatch handling
@@ -680,7 +863,9 @@ pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
     path: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
-    let base_url = env::var("TPS2_BASE_URL").ok();
+    let base_url = env::var("TPS2_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
 
     let response_result = match base_url {
         Some(url) => call_real_tps2(token_store, &url, method, path, body).await,
@@ -722,7 +907,7 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
     token_store: &S,
 ) -> Result<AuthStatusResponse, ApiError> {
     let token = match token_store.load() {
-        Ok(Some(pair)) => pair.access_token,
+        Ok(Some(pair)) if !pair.access_token.trim().is_empty() => pair.access_token,
         _ => {
             return Ok(AuthStatusResponse {
                 status: "unauthenticated".to_string(),
@@ -733,92 +918,114 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
         }
     };
 
-    let db_path = crate::get_db_path(app_handle);
-    let conn = rusqlite::Connection::open(&db_path)
-        .map_err(|e| ApiError::DatabaseError(format!("Failed to open SQLite: {}", e)))?;
+    let base_url = env::var("TPS2_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
 
-    let mut stmt = conn
-        .prepare("SELECT user_id, active_tenant_id FROM sessions WHERE token = ?1")
-        .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
-
-    let session_res = stmt.query_row([&token], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-    });
-
-    match session_res {
-        Ok((user_id, active_tenant_id)) => {
-            let mut stmt_user = conn
-                .prepare("SELECT email, name FROM users WHERE id = ?1")
-                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
-            let (email, name): (String, String) = stmt_user
-                .query_row([&user_id], |row| {
-                    Ok((row.get(0)?, row.get::<_, String>(1).unwrap_or_default()))
+    if let Some(url) = base_url {
+        match call_real_tps2(token_store, &url, "GET", "/v1/auth/profile", &Value::Null).await {
+            Ok(profile_val) => Ok(parse_profile_response(&profile_val)),
+            Err(ApiError::InvalidCredentials) => {
+                let _ = token_store.clear();
+                Ok(AuthStatusResponse {
+                    status: "unauthenticated".to_string(),
+                    user: None,
+                    tenants: Vec::new(),
+                    active_tenant: None,
                 })
-                .map_err(|_| ApiError::DatabaseError("User record missing for session".to_string()))?;
-
-            let mut stmt_tenants = conn
-                .prepare(
-                    "SELECT t.id, t.code, t.name, ut.role FROM tenants t
-                 JOIN user_tenants ut ON t.id = ut.tenant_id
-                 WHERE ut.user_id = ?1",
-                )
-                .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
-
-            let tenant_rows = stmt_tenants
-                .query_map([&user_id], |row| {
-                    Ok(AuthTenant {
-                        id: row.get::<_, String>(0)?,
-                        code: row.get::<_, String>(1)?,
-                        name: row.get::<_, String>(2)?,
-                        role: row.get::<_, String>(3)?,
-                    })
-                })
-                .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
-
-            let mut tenants = Vec::new();
-            for t in tenant_rows {
-                if let Ok(val) = t {
-                    tenants.push(val);
-                }
             }
-
-            let active_tenant = if let Some(ref t_id) = active_tenant_id {
-                tenants.iter().find(|t| &t.id == t_id).cloned()
-            } else {
-                None
-            };
-
-            let status = if tenants.is_empty() {
-                "needs_tenant_creation"
-            } else if active_tenant.is_none() {
-                "needs_tenant_selection"
-            } else {
-                "authenticated"
-            };
-
-            let display_name = if name.trim().is_empty() {
-                email.clone()
-            } else {
-                name
-            };
-
-            Ok(AuthStatusResponse {
-                status: status.to_string(),
-                user: Some(AuthUser {
-                    id: user_id,
-                    email,
-                    display_name,
-                }),
-                tenants,
-                active_tenant,
-            })
+            Err(err) => Err(err),
         }
-        Err(_) => Ok(AuthStatusResponse {
-            status: "unauthenticated".to_string(),
-            user: None,
-            tenants: Vec::new(),
-            active_tenant: None,
-        }),
+    } else {
+        let db_path = crate::get_db_path(app_handle);
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| ApiError::DatabaseError(format!("Failed to open SQLite: {}", e)))?;
+
+        let mut stmt = conn
+            .prepare("SELECT user_id, active_tenant_id FROM sessions WHERE token = ?1")
+            .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
+
+        let session_res = stmt.query_row([&token], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        });
+
+        match session_res {
+            Ok((user_id, active_tenant_id)) => {
+                let mut stmt_user = conn
+                    .prepare("SELECT email, name FROM users WHERE id = ?1")
+                    .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
+                let (email, name): (String, String) = stmt_user
+                    .query_row([&user_id], |row| {
+                        Ok((row.get(0)?, row.get::<_, String>(1).unwrap_or_default()))
+                    })
+                    .map_err(|_| {
+                        ApiError::DatabaseError("User record missing for session".to_string())
+                    })?;
+
+                let mut stmt_tenants = conn
+                    .prepare(
+                        "SELECT t.id, t.code, t.name, ut.role FROM tenants t
+                     JOIN user_tenants ut ON t.id = ut.tenant_id
+                     WHERE ut.user_id = ?1",
+                    )
+                    .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
+
+                let tenant_rows = stmt_tenants
+                    .query_map([&user_id], |row| {
+                        Ok(AuthTenant {
+                            id: row.get::<_, String>(0)?,
+                            code: row.get::<_, String>(1)?,
+                            name: row.get::<_, String>(2)?,
+                            role: row.get::<_, String>(3)?,
+                        })
+                    })
+                    .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
+
+                let mut tenants = Vec::new();
+                for t in tenant_rows {
+                    if let Ok(val) = t {
+                        tenants.push(val);
+                    }
+                }
+
+                let active_tenant = if let Some(ref t_id) = active_tenant_id {
+                    tenants.iter().find(|t| &t.id == t_id).cloned()
+                } else {
+                    None
+                };
+
+                let status = if tenants.is_empty() {
+                    "needs_tenant_creation"
+                } else if active_tenant.is_none() {
+                    "needs_tenant_selection"
+                } else {
+                    "authenticated"
+                };
+
+                let display_name = if name.trim().is_empty() {
+                    email.clone()
+                } else {
+                    name
+                };
+
+                Ok(AuthStatusResponse {
+                    status: status.to_string(),
+                    user: Some(AuthUser {
+                        id: user_id,
+                        email,
+                        display_name,
+                    }),
+                    tenants,
+                    active_tenant,
+                })
+            }
+            Err(_) => Ok(AuthStatusResponse {
+                status: "unauthenticated".to_string(),
+                user: None,
+                tenants: Vec::new(),
+                active_tenant: None,
+            }),
+        }
     }
 }
 
@@ -826,7 +1033,12 @@ pub(crate) async fn execute_logout<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
     token_store: &S,
 ) -> Result<(), ApiError> {
-    if let Ok(Some(pair)) = token_store.load() {
+    let base_url = env::var("TPS2_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if let Some(url) = base_url {
+        let _ = call_real_tps2(token_store, &url, "POST", "/v1/auth/logout", &json!({})).await;
+    } else if let Ok(Some(pair)) = token_store.load() {
         let db_path = crate::get_db_path(app_handle);
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
             let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&pair.access_token]);
@@ -1871,6 +2083,247 @@ mod tests {
         assert!(res.is_ok());
         let val = res.unwrap();
         assert!(val.success);
+    }
+
+    #[test]
+    fn test_extract_error_reason_variations() {
+        // Given: different JSON structures
+        let top_level = json!({ "reason": "IAM_ERR_INVALID_CREDENTIALS" });
+        let details_array = json!({
+            "code": 3,
+            "message": "invalid password",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "IAM_ERR_WEAK_PASSWORD",
+                    "domain": "iam.numax.com"
+                }
+            ]
+        });
+        let error_nested = json!({
+            "error": {
+                "reason": "IAM_ERR_EMAIL_TAKEN",
+                "details": []
+            }
+        });
+        let error_nested_details = json!({
+            "error": {
+                "details": [
+                    { "reason": "IAM_ERR_USER_LOCKED" }
+                ]
+            }
+        });
+        let error_code_field = json!({ "error_code": "IAM_ERR_TENANT_NOT_ASSIGNED" });
+        let empty_obj = json!({ "message": "plain error" });
+
+        // When & Then: reasons are extracted accurately
+        assert_eq!(
+            extract_error_reason(&top_level),
+            Some("IAM_ERR_INVALID_CREDENTIALS")
+        );
+        assert_eq!(
+            extract_error_reason(&details_array),
+            Some("IAM_ERR_WEAK_PASSWORD")
+        );
+        assert_eq!(
+            extract_error_reason(&error_nested),
+            Some("IAM_ERR_EMAIL_TAKEN")
+        );
+        assert_eq!(
+            extract_error_reason(&error_nested_details),
+            Some("IAM_ERR_USER_LOCKED")
+        );
+        assert_eq!(
+            extract_error_reason(&error_code_field),
+            Some("IAM_ERR_TENANT_NOT_ASSIGNED")
+        );
+        assert_eq!(extract_error_reason(&empty_obj), None);
+    }
+
+    #[test]
+    fn test_parse_http_response_success() {
+        // Given: 200 OK status and valid JSON body
+        let status = reqwest::StatusCode::OK;
+        let text = r#"{"accessToken":"t1","user":{"id":"u1"}}"#;
+
+        // When: parsing HTTP response
+        let res = parse_http_response(status, text);
+
+        // Then: succeeds with parsed JSON
+        assert!(res.is_ok());
+        let val = res.unwrap();
+        assert_eq!(val.get("accessToken").unwrap(), "t1");
+    }
+
+    #[test]
+    fn test_parse_http_response_401_unauthorized() {
+        // Given: 401 Unauthorized status
+        let status = reqwest::StatusCode::UNAUTHORIZED;
+        let text = r#"{"message":"unauthorized"}"#;
+
+        // When: parsing HTTP response
+        let res = parse_http_response(status, text);
+
+        // Then: returns InvalidCredentials
+        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
+    }
+
+    #[test]
+    fn test_parse_http_response_grpc_error_info_mapping() {
+        // Given: status codes and response bodies with google.rpc.ErrorInfo
+        let cases = vec![
+            (
+                reqwest::StatusCode::BAD_REQUEST,
+                r#"{"details":[{"reason":"IAM_ERR_WEAK_PASSWORD"}]}"#,
+                ApiError::WeakPassword,
+            ),
+            (
+                reqwest::StatusCode::CONFLICT,
+                r#"{"details":[{"reason":"IAM_ERR_EMAIL_TAKEN"}]}"#,
+                ApiError::EmailTaken,
+            ),
+            (
+                reqwest::StatusCode::FORBIDDEN,
+                r#"{"details":[{"reason":"IAM_ERR_TENANT_NOT_ASSIGNED"}]}"#,
+                ApiError::TenantNotAssigned,
+            ),
+            (
+                reqwest::StatusCode::CONFLICT,
+                r#"{"details":[{"reason":"IAM_ERR_TENANT_CODE_TAKEN"}]}"#,
+                ApiError::TenantCodeTaken,
+            ),
+            (
+                reqwest::StatusCode::FORBIDDEN,
+                r#"{"details":[{"reason":"IAM_ERR_USER_LOCKED"}]}"#,
+                ApiError::UserLocked,
+            ),
+            (
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                r#"{"details":[{"reason":"IAM_ERR_PROVISION_FAILED"}]}"#,
+                ApiError::ProvisionFailed,
+            ),
+            (
+                reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                r#"{"message":"server crashed"}"#,
+                ApiError::Unknown("server crashed".to_string()),
+            ),
+        ];
+
+        for (status, body, expected_err) in cases {
+            // When: parsing HTTP response
+            let res = parse_http_response(status, body);
+
+            // Then: error is correctly mapped
+            assert_eq!(res.unwrap_err(), expected_err);
+        }
+    }
+
+    #[test]
+    fn test_parse_profile_response_single_and_multi_tenant() {
+        // Given: profile with single tenant
+        let single_val = json!({
+            "userId": "usr_1",
+            "email": "user1@example.com",
+            "displayName": "User One",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" }
+            ]
+        });
+
+        // When: parsing single tenant profile
+        let single_res = parse_profile_response(&single_val);
+
+        // Then: status is authenticated and active tenant is selected
+        assert_eq!(single_res.status, "authenticated");
+        assert_eq!(single_res.user.as_ref().unwrap().email, "user1@example.com");
+        assert_eq!(single_res.active_tenant.as_ref().unwrap().code, "code1");
+
+        // Given: profile with multiple tenants without active tenant
+        let multi_val = json!({
+            "userId": "usr_2",
+            "email": "user2@example.com",
+            "displayName": "User Two",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" },
+                { "id": "tnt_2", "code": "code2", "name": "Tenant 2", "role": "member" }
+            ]
+        });
+
+        // When: parsing multi tenant profile
+        let multi_res = parse_profile_response(&multi_val);
+
+        // Then: status is needs_tenant_selection
+        assert_eq!(multi_res.status, "needs_tenant_selection");
+        assert_eq!(multi_res.tenants.len(), 2);
+        assert!(multi_res.active_tenant.is_none());
+
+        // Given: profile with no tenants
+        let empty_val = json!({
+            "userId": "usr_3",
+            "email": "user3@example.com",
+            "tenants": []
+        });
+
+        // When: parsing empty tenants profile
+        let empty_res = parse_profile_response(&empty_val);
+
+        // Then: status is needs_tenant_creation
+        assert_eq!(empty_res.status, "needs_tenant_creation");
+    }
+
+    #[tokio::test]
+    async fn test_call_real_tps2_unsupported_method_and_network_error() {
+        // Given: token store and dummy url
+        let token_store = InMemoryTokenStore::new();
+
+        // When: invoking unsupported HTTP method
+        let res_method = call_real_tps2(&token_store, "http://127.0.0.1:9", "PATCH", "/v1/auth", &Value::Null).await;
+
+        // Then: returns InvalidArgument
+        assert!(matches!(res_method.unwrap_err(), ApiError::InvalidArgument(_)));
+
+        // When: invoking invalid/unreachable host
+        let res_net = call_real_tps2(&token_store, "http://127.0.0.1:1", "GET", "/v1/auth", &Value::Null).await;
+
+        // Then: returns NetworkError
+        assert!(matches!(res_net.unwrap_err(), ApiError::NetworkError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_execute_api_call_empty_base_url_falls_back_to_mock() {
+        // Given: TPS2_BASE_URL set to whitespace or empty string
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+        std::env::set_var("TPS2_BASE_URL", "   ");
+
+        // When: calling api_call for unregistered email
+        let res = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/login",
+            &json!({"email": "none@example.com", "password": "pass"}),
+        )
+        .await;
+
+        // Then: fallback to local SQLite mock returns InvalidCredentials
+        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
+
+        std::env::remove_var("TPS2_BASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_execute_get_auth_status_no_token_returns_unauthenticated() {
+        // Given: token store without token
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+
+        // When: get auth status
+        let res = execute_get_auth_status(&handle, &token_store).await;
+
+        // Then: returns unauthenticated
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().status, "unauthenticated");
     }
 
     #[test]
