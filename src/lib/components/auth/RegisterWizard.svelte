@@ -1,4 +1,8 @@
 <script>
+  // @ts-check
+  /**
+   * @typedef {import('../../bindings').ApiErrorPayload} ApiErrorPayload
+   */
   import { registerTenant, navigate, appState } from '../../store.svelte.js';
 
   let currentStep = $state(1); // 1: Account, 2: Company
@@ -27,7 +31,7 @@
 
     if (score <= 1) return { score, label: '弱 (太短或太簡單)', color: 'rgb(239, 68, 68)' };
     if (score === 2) return { score, label: '中等', color: 'rgb(245, 158, 11)' };
-    if (score >= 3) return { score, label: '強', color: 'rgb(16, 185, 129)' };
+    return { score, label: '強', color: 'rgb(16, 185, 129)' };
   });
 
   // Step 1 validation
@@ -60,6 +64,9 @@
     }
   }
 
+  /**
+   * @param {SubmitEvent} e
+   */
   async function handleSubmit(e) {
     e.preventDefault();
     if (!isStep1Valid || !isStep2Valid) {
@@ -81,7 +88,8 @@
       }
     } catch (err) {
       console.error("Registration failed:", err);
-      const code = err?.code || err;
+      const errorObj = /** @type {any} */ (err);
+      const code = errorObj?.code || err;
       if (code === 'IAM_ERR_EMAIL_TAKEN') {
         errorMessage = '該電子郵件已被註冊過 (IAM_ERR_EMAIL_TAKEN)';
         currentStep = 1; // Send back to step 1
@@ -89,7 +97,7 @@
         errorMessage = '密碼強度不足，請使用更複雜的密碼 (IAM_ERR_WEAK_PASSWORD)';
         currentStep = 1;
       } else {
-        errorMessage = `註冊失敗：${err?.message || err?.code || err}`;
+        errorMessage = `註冊失敗：${errorObj?.message || errorObj?.code || err}`;
       }
     } finally {
       isLoading = false;

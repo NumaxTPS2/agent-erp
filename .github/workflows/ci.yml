@@ -36,6 +36,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Frontend type check (svelte-check)
+        run: npm run check
+
       - name: Build frontend static assets
         run: npm run build
 

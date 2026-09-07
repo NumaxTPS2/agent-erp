@@ -1,9 +1,17 @@
 <script>
+  // @ts-check
+  /**
+   * @typedef {import('../../bindings').AuthTenant} AuthTenant
+   * @typedef {import('../../bindings').ApiErrorPayload} ApiErrorPayload
+   */
   import { selectTenantAction, navigate, appState } from '../../store.svelte.js';
 
   let isLoading = $state(false);
   let errorMessage = $state('');
 
+  /**
+   * @param {string} tenantId
+   */
   async function handleSelectTenant(tenantId) {
     isLoading = true;
     errorMessage = '';
@@ -17,11 +25,12 @@
       }
     } catch (err) {
       console.error("Select tenant failed:", err);
-      const code = err?.code || err;
+      const errorObj = /** @type {any} */ (err);
+      const code = errorObj?.code || err;
       if (code === 'IAM_ERR_TENANT_NOT_ASSIGNED') {
         errorMessage = '無此租戶的存取權限 (IAM_ERR_TENANT_NOT_ASSIGNED)';
       } else {
-        errorMessage = `租戶選取失敗：${err?.message || err?.code || err}`;
+        errorMessage = `租戶選取失敗：${errorObj?.message || errorObj?.code || err}`;
       }
     } finally {
       isLoading = false;

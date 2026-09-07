@@ -1,4 +1,8 @@
 <script>
+  // @ts-check
+  /**
+   * @typedef {import('../../bindings').ApiErrorPayload} ApiErrorPayload
+   */
   import { login, navigate, appState } from '../../store.svelte.js';
 
   let email = $state('');
@@ -6,6 +10,9 @@
   let isLoading = $state(false);
   let errorMessage = $state('');
 
+  /**
+   * @param {SubmitEvent} e
+   */
   async function handleLogin(e) {
     e.preventDefault();
     if (!email || !password) {
@@ -28,11 +35,12 @@
       }
     } catch (err) {
       console.error("Login failed:", err);
-      const code = err?.code || err;
+      const errorObj = /** @type {any} */ (err);
+      const code = errorObj?.code || err;
       if (code === 'IAM_ERR_INVALID_CREDENTIALS') {
         errorMessage = '帳號或密碼錯誤 (IAM_ERR_INVALID_CREDENTIALS)';
       } else {
-        errorMessage = `登入失敗：${err?.message || err?.code || err}`;
+        errorMessage = `登入失敗：${errorObj?.message || errorObj?.code || err}`;
       }
     } finally {
       isLoading = false;
