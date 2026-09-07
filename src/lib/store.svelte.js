@@ -1,3 +1,13 @@
+// @ts-check
+
+/**
+ * @typedef {import('./bindings').AuthStatusResponse} AuthStatusResponse
+ * @typedef {import('./bindings').AuthUser} AuthUser
+ * @typedef {import('./bindings').AuthTenant} AuthTenant
+ * @typedef {import('./bindings').ApiErrorPayload} ApiErrorPayload
+ * @typedef {import('./bindings').LogoutResponse} LogoutResponse
+ */
+
 import { invoke, check, relaunch } from './tauri.js';
 import { loadModule } from './registry.js';
 
@@ -6,7 +16,9 @@ export const appState = $state({
   route: '/app/sales',
   version: '0.1.0',
   isEnterpriseActive: false,
+  /** @type {any[]} */
   installedModules: [], // List of installed module metadata
+  /** @type {Record<string, any>} */
   loadedComponents: {}, // Map of moduleId -> Svelte Component class
 
   get activeWorkspace() {
@@ -36,6 +48,7 @@ export const appState = $state({
   },
 
   // Chat panel state
+  /** @type {Array<{ role: string, content: string }>} */
   chatMessages: [
     { role: 'assistant', content: '你好，我是 AgentERP 智能助理。我已經載入本地安全邊緣工作站上下文，隨時可以為您服務。' }
   ],
@@ -43,11 +56,15 @@ export const appState = $state({
   currentStreamContent: '',
 
   // Database cache lists
+  /** @type {any[]} */
   mirroredOrders: [],
+  /** @type {any[]} */
   auditLogs: [],
+  /** @type {any[]} */
   notifications: [],
 
   // Mutation interceptor queue
+  /** @type {any} */
   pendingMutation: null, // { id, title, details }
 
   // System updater status
@@ -55,14 +72,21 @@ export const appState = $state({
   updateNotes: '',
   updateStatus: 'idle', // 'idle' | 'checking' | 'downloading' | 'finished' | 'up-to-date'
   updateProgress: { percent: 0, downloaded: 0, total: 100 },
+  /** @type {any} */
   activeUpdate: null, // Tauri updater instance
+  /** @type {string | null} */
   toastMessage: null, // Toast popup message
+  /** @type {any[]} */
   modulesGallery: [], // List of available modules in cloud store
   
   // Auth state
+  /** @type {string} */
   authStatus: 'unauthenticated', // 'unauthenticated' | 'needs_tenant_selection' | 'needs_tenant_creation' | 'authenticated'
+  /** @type {AuthUser | null} */
   authUser: null,
+  /** @type {AuthTenant[]} */
   authTenants: [],
+  /** @type {AuthTenant | null} */
   activeTenant: null
 });
 
@@ -396,8 +420,13 @@ function runMockUpgrade() {
   }, 100);
 }
 
+/**
+ * Check current authentication status from backend
+ * @returns {Promise<AuthStatusResponse | undefined>}
+ */
 export async function checkAuthStatus() {
   try {
+    /** @type {AuthStatusResponse} */
     const res = await invoke('get_auth_status');
     appState.authStatus = res.status;
     appState.authUser = res.user;
@@ -413,13 +442,20 @@ export async function checkAuthStatus() {
   }
 }
 
-// Generic API Call helper that handles token expiration globally
+/**
+ * Generic API Call helper that handles token expiration globally
+ * @param {string} method
+ * @param {string} path
+ * @param {Record<string, any>} [body]
+ * @returns {Promise<any>}
+ */
 export async function apiCall(method, path, body = {}) {
   try {
     return await invoke('api_call', { method, path, body });
   } catch (err) {
-    const errCode = err?.code || (typeof err === 'string' ? err : '');
-    const errMsg = err?.message || (typeof err === 'string' ? err : '');
+    const errorObj = /** @type {any} */ (err);
+    const errCode = errorObj?.code || (typeof err === 'string' ? err : '');
+    const errMsg = errorObj?.message || (typeof err === 'string' ? err : '');
     const isAuthExpired = 
       errCode === 'IAM_ERR_INVALID_CREDENTIALS' ||
       errMsg.includes('401') ||
@@ -438,12 +474,26 @@ export async function apiCall(method, path, body = {}) {
   }
 }
 
+/**
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<any>}
+ */
 export async function login(email, password) {
   const res = await apiCall('POST', '/v1/auth/login', { email, password, client_type: 'app' });
   await checkAuthStatus();
   return res;
 }
 
+/**
+ * @param {string} adminName
+ * @param {string} tenantName
+ * @param {string} companyName
+ * @param {string} adminEmail
+ * @param {string} adminPassword
+ * @param {string} tenantCode
+ * @returns {Promise<any>}
+ */
 export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode) {
   const res = await apiCall('POST', '/v1/auth/register-tenant', {
     admin_name: adminName,
@@ -457,6 +507,9 @@ export async function registerTenant(adminName, tenantName, companyName, adminEm
   return res;
 }
 
+/**
+ * @returns {Promise<void>}
+ */
 export async function logoutAction() {
   try {
     await apiCall('POST', '/v1/auth/logout', {});
@@ -470,12 +523,23 @@ export async function logoutAction() {
   navigate('/login');
 }
 
+/**
+ * @param {string} tenantId
+ * @returns {Promise<any>}
+ */
 export async function selectTenantAction(tenantId) {
   const res = await apiCall('POST', '/v1/auth/select-tenant', { tenant_id: tenantId });
   await checkAuthStatus();
   return res;
 }
 
+/**
+ * @param {string} tenantName
+ * @param {string} companyName
+ * @param {string} tenantCode
+ * @param {string} [taxId]
+ * @returns {Promise<any>}
+ */
 export async function createTenantAction(tenantName, companyName, tenantCode, taxId) {
   const res = await apiCall('POST', '/v1/auth/create-tenant', {
     tenant_name: tenantName,
