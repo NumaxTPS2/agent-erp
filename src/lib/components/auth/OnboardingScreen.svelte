@@ -1,4 +1,8 @@
 <script>
+  // @ts-check
+  /**
+   * @typedef {import('../../bindings').ApiErrorPayload} ApiErrorPayload
+   */
   import { createTenantAction, navigate, appState } from '../../store.svelte.js';
 
   let tenantCode = $state('');
@@ -43,6 +47,9 @@
     return isValid;
   }
 
+  /**
+   * @param {SubmitEvent} e
+   */
   async function handleSubmit(e) {
     e.preventDefault();
     if (!validateForm()) return;
@@ -59,11 +66,12 @@
       }
     } catch (err) {
       console.error("Create tenant failed:", err);
-      const code = err?.code || err;
+      const errorObj = /** @type {any} */ (err);
+      const code = errorObj?.code || err;
       if (code === 'IAM_ERR_TENANT_CODE_TAKEN') {
         errors.tenantCode = '此集團代碼已被使用 (IAM_ERR_TENANT_CODE_TAKEN)';
       } else {
-        errorMessage = `建立公司失敗：${err?.message || err?.code || err}`;
+        errorMessage = `建立公司失敗：${errorObj?.message || errorObj?.code || err}`;
       }
     } finally {
       isLoading = false;
