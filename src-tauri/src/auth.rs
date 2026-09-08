@@ -477,6 +477,17 @@ async fn call_real_tps2<S: TokenStore>(
         }
     }
 
+    if let Ok(cf_id) = env::var("CF_ACCESS_CLIENT_ID") {
+        if !cf_id.trim().is_empty() {
+            req = req.header("CF-Access-Client-Id", cf_id.trim());
+        }
+    }
+    if let Ok(cf_secret) = env::var("CF_ACCESS_CLIENT_SECRET") {
+        if !cf_secret.trim().is_empty() {
+            req = req.header("CF-Access-Client-Secret", cf_secret.trim());
+        }
+    }
+
     let res = req
         .send()
         .await
