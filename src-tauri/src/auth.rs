@@ -884,6 +884,33 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_TPS2_BASE_URL: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
+}
+
+fn parse_tps2_base_url(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn get_tps2_base_url() -> Option<String> {
+    #[cfg(test)]
+    {
+        TEST_TPS2_BASE_URL.with(|url| url.borrow().clone())
+    }
+    #[cfg(not(test))]
+    {
+        parse_tps2_base_url(env::var("TPS2_BASE_URL").ok().as_deref())
+    }
+}
+
 pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
     app_handle: &tauri::AppHandle<R>,
     token_store: &S,
@@ -891,9 +918,7 @@ pub(crate) async fn execute_api_call<R: tauri::Runtime, S: TokenStore>(
     path: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
-    let base_url = env::var("TPS2_BASE_URL")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+    let base_url = get_tps2_base_url();
 
     let response_result = match base_url {
         Some(url) => call_real_tps2(token_store, &url, method, path, body).await,
@@ -946,9 +971,7 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
         }
     };
 
-    let base_url = env::var("TPS2_BASE_URL")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
+    let base_url = get_tps2_base_url();
 
     if let Some(url) = base_url {
         match call_real_tps2(token_store, &url, "GET", "/v1/auth/profile", &Value::Null).await {
@@ -1191,7 +1214,7 @@ mod tests {
         handle
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_login_success() {
         // Given: setup user with name in test database and in-memory token store
         let handle = setup_test_db();
@@ -1243,7 +1266,7 @@ mod tests {
         assert_eq!(pair.unwrap().access_token, "mock-token-u1");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_login_fallback_display_name_to_email() {
         // Given: user with empty name in database
         let handle = setup_test_db();
@@ -1281,7 +1304,7 @@ mod tests {
         assert_eq!(login_resp.display_name.as_deref(), Some("noname@example.com"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_login_invalid_credentials() {
         // Given: setup user in test database and in-memory token store
         let handle = setup_test_db();
@@ -1331,7 +1354,7 @@ mod tests {
             }
         );
     }
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_login_missing_parameters() {
         // Given: setup user in test database and in-memory token store
         let handle = setup_test_db();
@@ -1369,7 +1392,7 @@ mod tests {
         assert!(matches!(res_empty_email.unwrap_err(), ApiError::InvalidArgument(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_register_tenant_success() {
         // Given: setup fresh test database and in-memory token store
         let handle = setup_test_db();
@@ -1434,7 +1457,7 @@ mod tests {
         assert!(token_store.load().unwrap().is_some());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_register_tenant_missing_or_empty_admin_name() {
         // Given: fresh database
         let handle = setup_test_db();
@@ -1463,7 +1486,7 @@ mod tests {
         assert!(matches!(res.unwrap_err(), ApiError::InvalidArgument(_)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_register_tenant_email_taken() {
         // Given: database with existing email
         let handle = setup_test_db();
@@ -1500,7 +1523,7 @@ mod tests {
         assert_eq!(res.unwrap_err(), ApiError::EmailTaken);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_register_tenant_weak_password() {
         // Given: fresh database
         let handle = setup_test_db();
@@ -1529,7 +1552,7 @@ mod tests {
         assert_eq!(res.unwrap_err(), ApiError::WeakPassword);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_token_never_returned_to_js() {
         // Given: fresh database
         let handle = setup_test_db();
@@ -1562,7 +1585,7 @@ mod tests {
         assert!(!res_val.to_string().contains("refresh_token"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_select_tenant_success() {
         // Given: Seed user, tenant, member relation, active session and token in token_store
         let handle = setup_test_db();
@@ -1619,7 +1642,7 @@ mod tests {
         assert_eq!(pair.access_token, "mock-scoped-token-u1");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_select_tenant_not_member() {
         // Given: Seed user and session, but NO user_tenant relationship to tnt2
         let handle = setup_test_db();
@@ -1658,7 +1681,7 @@ mod tests {
         assert_eq!(res.unwrap_err(), ApiError::TenantNotAssigned);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_login_multi_tenant_requires_selection() {
         // Given: user with 2 tenants
         let handle = setup_test_db();
@@ -1719,7 +1742,7 @@ mod tests {
         assert_eq!(status_val.tenants.len(), 2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_create_tenant_success() {
         // Given: Seed user and active session without active_tenant_id
         let handle = setup_test_db();
@@ -1778,7 +1801,7 @@ mod tests {
         assert_eq!(status_res.active_tenant.unwrap().code, "new_tnt");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_create_tenant_duplicate_code() {
         // Given: Seed user, existing tenant with same code, and active session
         let handle = setup_test_db();
@@ -1852,7 +1875,7 @@ mod tests {
         assert_eq!(store.load().unwrap(), None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_api_call_logout_success() {
         // Given: setup test database with a user, active session and in-memory tokens
         let handle = setup_test_db();
@@ -1898,7 +1921,7 @@ mod tests {
         assert_eq!(token_store.load().unwrap(), None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_api_call_expired_token_clears_keychain() {
         // Given: mock token stored in token_store
         let handle = setup_test_db();
@@ -1922,7 +1945,7 @@ mod tests {
         assert_eq!(token_store.load().unwrap(), None);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_api_call_login_failure_does_not_clear_keychain() {
         // Given: setup test database, seed previous active token
         let handle = setup_test_db();
@@ -1955,7 +1978,7 @@ mod tests {
     // Issue #30 Layer 1 Acceptance Criteria Tests
     // ==========================================
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_get_auth_status_unauthenticated() {
         // Given: no token in token_store
         let handle = setup_test_db();
@@ -1973,7 +1996,7 @@ mod tests {
         assert!(val.tenants.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_get_auth_status_needs_tenant_creation() {
         // Given: user logged in with session but has 0 tenants assigned
         let handle = setup_test_db();
@@ -2006,7 +2029,7 @@ mod tests {
         assert!(val.tenants.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_get_auth_status_needs_tenant_selection() {
         // Given: user with multiple tenants but active_tenant_id is NULL
         let handle = setup_test_db();
@@ -2051,7 +2074,7 @@ mod tests {
         assert!(val.active_tenant.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_get_auth_status_authenticated() {
         // Given: user with active_tenant_id selected in session
         let handle = setup_test_db();
@@ -2095,7 +2118,7 @@ mod tests {
         assert_eq!(val.active_tenant.unwrap().code, "code_act");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_command_get_auth_status_delivery_boundary() {
         let handle = setup_test_db();
         let res = get_auth_status(handle).await;
@@ -2104,7 +2127,7 @@ mod tests {
         assert_eq!(val.status, "unauthenticated");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_command_logout_delivery_boundary() {
         let handle = setup_test_db();
         let res = logout(handle).await;
@@ -2394,7 +2417,7 @@ mod tests {
         assert!(mismatch_res.active_tenant.is_none());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_call_real_tps2_unsupported_method_and_network_error() {
         // Given: token store and dummy url
         let token_store = InMemoryTokenStore::new();
@@ -2412,30 +2435,35 @@ mod tests {
         assert!(matches!(res_net.unwrap_err(), ApiError::NetworkError(_)));
     }
 
-    #[tokio::test]
-    async fn test_execute_api_call_empty_base_url_falls_back_to_mock() {
-        // Given: TPS2_BASE_URL set to whitespace or empty string
-        let handle = setup_test_db();
-        let token_store = InMemoryTokenStore::new();
-        std::env::set_var("TPS2_BASE_URL", "   ");
+    #[test]
+    fn test_parse_tps2_base_url_equivalence_and_boundaries() {
+        // Given: Various raw input representations for TPS2_BASE_URL (TC-ENV-01)
+        // Perspective: Equivalence & Boundaries (None, empty, whitespace, valid URL, padded URL)
+        let cases: Vec<(Option<&str>, Option<String>)> = vec![
+            (None, None),
+            (Some(""), None),
+            (Some("   "), None),
+            (Some("\t\n  "), None),
+            (
+                Some("https://tps2.example.com"),
+                Some("https://tps2.example.com".to_string()),
+            ),
+            (
+                Some("  https://tps2.example.com/api  "),
+                Some("https://tps2.example.com/api".to_string()),
+            ),
+        ];
 
-        // When: calling api_call for unregistered email
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/login",
-            &json!({"email": "none@example.com", "password": "pass"}),
-        )
-        .await;
+        for (input, expected) in cases {
+            // When: parsing raw URL string
+            let actual = parse_tps2_base_url(input);
 
-        // Then: fallback to local SQLite mock returns InvalidCredentials
-        assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
-
-        std::env::remove_var("TPS2_BASE_URL");
+            // Then: result matches expected Option<String>
+            assert_eq!(actual, expected);
+        }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_execute_get_auth_status_no_token_returns_unauthenticated() {
         // Given: token store without token
         let handle = setup_test_db();
