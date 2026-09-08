@@ -376,33 +376,50 @@ fn parse_profile_response(profile_val: &Value) -> AuthStatusResponse {
     }
 
     let mut active_tenant = None;
-    if let Some(act) = profile_val
-        .get("activeTenant")
-        .or_else(|| profile_val.get("active_tenant"))
-    {
-        if let (Some(id), Some(code), Some(name)) = (
-            act.get("id").and_then(|v| v.as_str()),
-            act.get("code").and_then(|v| v.as_str()),
-            act.get("name").and_then(|v| v.as_str()),
-        ) {
-            let role = act
-                .get("role")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            active_tenant = Some(AuthTenant {
-                id: id.to_string(),
-                code: code.to_string(),
-                name: name.to_string(),
-                role,
-            });
+    let active_tenant_id = profile_val
+        .get("activeTenantId")
+        .or_else(|| profile_val.get("active_tenant_id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .unwrap_or_default();
+
+    if !active_tenant_id.is_empty() {
+        if let Some(matched) = tenants.iter().find(|t| t.id == active_tenant_id) {
+            active_tenant = Some(matched.clone());
         }
-    } else if tenants.len() == 1 {
-        active_tenant = tenants.first().cloned();
     }
 
-    let status = if let Some(st) = profile_val.get("status").and_then(|v| v.as_str()) {
-        st.to_string()
+    if active_tenant.is_none() {
+        if let Some(act) = profile_val
+            .get("activeTenant")
+            .or_else(|| profile_val.get("active_tenant"))
+        {
+            if let (Some(id), Some(code), Some(name)) = (
+                act.get("id").and_then(|v| v.as_str()),
+                act.get("code").and_then(|v| v.as_str()),
+                act.get("name").and_then(|v| v.as_str()),
+            ) {
+                let role = act
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                active_tenant = Some(AuthTenant {
+                    id: id.to_string(),
+                    code: code.to_string(),
+                    name: name.to_string(),
+                    role,
+                });
+            }
+        }
+    }
+
+    let status = if let Some(st) = profile_val
+        .get("loginStatus")
+        .or_else(|| profile_val.get("login_status"))
+        .and_then(|v| v.as_str())
+    {
+        st.trim().to_string()
     } else if tenants.is_empty() {
         "needs_tenant_creation".to_string()
     } else if active_tenant.is_none() {
@@ -2231,11 +2248,13 @@ mod tests {
 
     #[test]
     fn test_parse_profile_response_single_and_multi_tenant() {
-        // Given: profile with single tenant
+        // Given: profile with single tenant and activeTenantId (TC-PRF-04)
         let single_val = json!({
             "userId": "usr_1",
             "email": "user1@example.com",
             "displayName": "User One",
+            "loginStatus": "authenticated",
+            "activeTenantId": "tnt_1",
             "tenants": [
                 { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" }
             ]
@@ -2249,11 +2268,13 @@ mod tests {
         assert_eq!(single_res.user.as_ref().unwrap().email, "user1@example.com");
         assert_eq!(single_res.active_tenant.as_ref().unwrap().code, "code1");
 
-        // Given: profile with multiple tenants without active tenant
+        // Given: profile with multiple tenants without active tenant (TC-PRF-02)
         let multi_val = json!({
             "userId": "usr_2",
             "email": "user2@example.com",
             "displayName": "User Two",
+            "loginStatus": "needs_tenant_selection",
+            "activeTenantId": "",
             "tenants": [
                 { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" },
                 { "id": "tnt_2", "code": "code2", "name": "Tenant 2", "role": "member" }
@@ -2263,15 +2284,17 @@ mod tests {
         // When: parsing multi tenant profile
         let multi_res = parse_profile_response(&multi_val);
 
-        // Then: status is needs_tenant_selection
+        // Then: status is needs_tenant_selection and active_tenant is None
         assert_eq!(multi_res.status, "needs_tenant_selection");
         assert_eq!(multi_res.tenants.len(), 2);
         assert!(multi_res.active_tenant.is_none());
 
-        // Given: profile with no tenants
+        // Given: profile with no tenants (TC-PRF-01)
         let empty_val = json!({
             "userId": "usr_3",
             "email": "user3@example.com",
+            "loginStatus": "needs_tenant_creation",
+            "activeTenantId": "",
             "tenants": []
         });
 
@@ -2280,6 +2303,95 @@ mod tests {
 
         // Then: status is needs_tenant_creation
         assert_eq!(empty_res.status, "needs_tenant_creation");
+        assert!(empty_res.active_tenant.is_none());
+    }
+
+    #[test]
+    fn test_parse_profile_response_login_status_and_active_tenant_id() {
+        // Given: profile with status: "active" but loginStatus: "needs_tenant_selection" (TC-PRF-05)
+        let status_ignore_val = json!({
+            "userId": "usr_5",
+            "email": "user5@example.com",
+            "status": "active",
+            "loginStatus": "needs_tenant_selection",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "member" }
+            ]
+        });
+
+        // When: parsing profile with account status "active"
+        let status_ignore_res = parse_profile_response(&status_ignore_val);
+
+        // Then: account status is ignored, loginStatus is respected
+        assert_eq!(status_ignore_res.status, "needs_tenant_selection");
+        assert!(status_ignore_res.active_tenant.is_none());
+
+        // Given: snake_case keys login_status and active_tenant_id (TC-PRF-06)
+        let snake_val = json!({
+            "user_id": "usr_6",
+            "email": "user6@example.com",
+            "login_status": "authenticated",
+            "active_tenant_id": "tnt_2",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" },
+                { "id": "tnt_2", "code": "code2", "name": "Tenant 2", "role": "member" }
+            ]
+        });
+
+        // When: parsing profile with snake_case fields
+        let snake_res = parse_profile_response(&snake_val);
+
+        // Then: snake_case fields are correctly parsed
+        assert_eq!(snake_res.status, "authenticated");
+        assert_eq!(snake_res.active_tenant.as_ref().unwrap().id, "tnt_2");
+
+        // Given: fallback when loginStatus is missing on single tenant without activeTenantId (TC-PRF-07)
+        let fallback_single = json!({
+            "userId": "usr_7",
+            "email": "user7@example.com",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" }
+            ]
+        });
+
+        // When: parsing profile without loginStatus or activeTenantId
+        let fallback_single_res = parse_profile_response(&fallback_single);
+
+        // Then: falls back to needs_tenant_selection (does NOT auto-select single tenant)
+        assert_eq!(fallback_single_res.status, "needs_tenant_selection");
+        assert!(fallback_single_res.active_tenant.is_none());
+
+        // Given: fallback when loginStatus is missing on empty tenants (TC-PRF-08)
+        let fallback_empty = json!({
+            "userId": "usr_8",
+            "email": "user8@example.com",
+            "tenants": []
+        });
+
+        // When: parsing profile without loginStatus and empty tenants
+        let fallback_empty_res = parse_profile_response(&fallback_empty);
+
+        // Then: falls back to needs_tenant_creation
+        assert_eq!(fallback_empty_res.status, "needs_tenant_creation");
+        assert!(fallback_empty_res.active_tenant.is_none());
+
+        // Given: activeTenantId does not match any tenant in tenants array (TC-PRF-09)
+        let mismatch_val = json!({
+            "userId": "usr_9",
+            "email": "user9@example.com",
+            "loginStatus": "authenticated",
+            "activeTenantId": "non_existent_id",
+            "tenants": [
+                { "id": "tnt_1", "code": "code1", "name": "Tenant 1", "role": "admin" }
+            ]
+        });
+
+        // When: parsing profile with mismatch activeTenantId
+        let mismatch_res = parse_profile_response(&mismatch_val);
+
+        // Then: active_tenant is None
+        assert_eq!(mismatch_res.status, "authenticated");
+        assert!(mismatch_res.active_tenant.is_none());
     }
 
     #[tokio::test]
