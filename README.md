@@ -37,7 +37,24 @@ npm run check      # svelte-check 型別檢查
 npm run build      # 前端靜態資源建置
 ```
 
-對接真實 TPS2 環境時，設定 `TPS2_BASE_URL`（若環境有 Cloudflare Access 保護，另外設定 `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`）；不設定則自動使用本地 SQLite mock，不影響本機開發。
+### 對接真實 TPS2 環境
+
+不設定下列環境變數時，自動使用本地 SQLite mock，不影響本機開發。這些是**真的 process 環境變數**，要用 `export` 或指令前綴設定，不是 `.env` 檔案——這個專案沒有裝 `dotenv` 之類的 crate，Rust 是直接讀 process 的 `env::var`；`.env` 檔案即使存在也不會被 Rust 讀到（Vite 本身雖然會讀 `.env`，但只會把 `VITE_` 開頭的變數曝露給前端 JS，跟這裡要設的變數無關）。
+
+而且只有 `npm run tauri dev`（或未來的正式建置版本）才會真的用到這些變數：`npm run dev` 純瀏覽器模式下，`invoke()` 完全走 JS 端的 mock 邏輯，不會呼叫 Rust，設定了也不會有作用。
+
+| 變數 | 必填 | 說明 |
+|---|---|---|
+| `TPS2_BASE_URL` | 是 | TPS2 環境的 base URL（例如 `https://api-tps2-dev.numax.com.tw`）。留空或不設定則走本地 mock |
+| `CF_ACCESS_CLIENT_ID` | 視環境而定 | 若目標環境有 Cloudflare Access 保護才需要，對應 `CF-Access-Client-Id` header |
+| `CF_ACCESS_CLIENT_SECRET` | 視環境而定 | 若目標環境有 Cloudflare Access 保護才需要，對應 `CF-Access-Client-Secret` header |
+
+```bash
+TPS2_BASE_URL=https://api-tps2-dev.numax.com.tw \
+CF_ACCESS_CLIENT_ID=xxx \
+CF_ACCESS_CLIENT_SECRET=xxx \
+npm run tauri dev
+```
 
 Rust 測試：
 
