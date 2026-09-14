@@ -25,7 +25,12 @@ Svelte UI 元件 → store.svelte.js → Tauri #[tauri::command] → Rust 業務
 各功能的詳細設計說明書放在 [`docs/system_design/`](./docs/system_design/)，README 只列索引，不重複內容：
 
 - [`account_tenant_onboarding.md`](./docs/system_design/account_tenant_onboarding.md)：帳號登入、租戶選擇/建立的狀態機與真實後端對接方式
+- [`task_driven_workflow.md`](./docs/system_design/task_driven_workflow.md)：任務（Task）資料模型、任務與對話的綁定關係、任務面板行為
 - 其餘既有設計文件（Shell 版面、模組安裝、通知系統等）見該目錄下其他檔案
+
+各 milestone 的使用者旅程（步驟順序、進入/離開條件、DoD）放在 [`docs/journeys/`](./docs/journeys/)，跟 `system_design/` 分開——`system_design/` 記機制怎麼運作，`journeys/` 記使用者從頭走到尾的路徑，兩者互相引用不重複描述：
+
+- [`m2_team_onboarding.md`](./docs/journeys/m2_team_onboarding.md)：新租戶建立後的團隊組建旅程
 
 ## 開發
 
