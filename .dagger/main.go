@@ -10,11 +10,13 @@ import (
 
 type AgentErp struct{}
 
-// getRustContainer returns a container pre-configured with Rust toolchain for backend checks.
-// Toolchain components are installed before mounting source code to leverage Dagger layer caching.
+// getRustContainer returns a container pre-configured with Rust 1.x toolchain and Linux Tauri system dependencies.
+// System dependencies are installed without recommended packages to conserve disk space, with AllowInsecureRepositories flags to avoid GPG errors.
 func (m *AgentErp) getRustContainer(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
-		From("rust:1.85-bookworm").
+		From("rust:1-bookworm").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithExec([]string{"sh", "-c", "apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::AllowDowngradeToInsecureRepositories=true && apt-get install -y --allow-unauthenticated --no-install-recommends pkg-config build-essential libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev && apt-get clean && rm -rf /var/lib/apt/lists/*"}).
 		WithExec([]string{"rustup", "component", "add", "clippy", "rustfmt"}).
 		WithMountedCache("/usr/local/cargo/registry", dag.CacheVolume("cargo-registry")).
 		WithMountedCache("/usr/local/cargo/git", dag.CacheVolume("cargo-git")).
