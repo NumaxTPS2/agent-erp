@@ -1,46 +1,74 @@
-name: "CI Build Check"
+name: CI Quality Gate
 
 on:
   pull_request:
-    branches:
-      - main
-      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DO_NOT_TRACK: 1
 
 jobs:
-  build-check:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.platform }}
+  resolve-dagger-version:
+    runs-on: >-
+      ${{ github.repository == 'NumaxTPS2/agent-erp'
+          && fromJSON('["self-hosted","coolify"]')
+          || 'ubuntu-latest' }}
+    outputs:
+      dagger_version: ${{ steps.resolve.outputs.dagger_version }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
+      - name: Resolve Dagger Version
+        id: resolve
+        run: |
+          set -euo pipefail
+          ENGINE_VERSION="$(awk -F'"' '/"engineVersion"/{print $4; exit}' dagger.json)"
+          if [ -z "${ENGINE_VERSION}" ]; then
+            echo "engineVersion is missing in dagger.json"
+            exit 1
+          fi
+          DAGGER_VERSION="${ENGINE_VERSION#v}"
+          echo "dagger_version=${DAGGER_VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          # In Tauri v2 we target Apple Silicon and Intel on macOS
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+  check-quality:
+    needs: resolve-dagger-version
+    runs-on: >-
+      ${{ github.repository == 'NumaxTPS2/agent-erp'
+          && fromJSON(format('["self-hosted","dagger:{0}"]', needs.resolve-dagger-version.outputs.dagger_version))
+          || 'ubuntu-latest' }}
 
-      - name: Cargo and Build caching
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Setup Dagger (only for hosted runners)
+        if: github.repository != 'NumaxTPS2/agent-erp'
+        env:
+          DAGGER_VERSION: ${{ needs.resolve-dagger-version.outputs.dagger_version }}
+        run: |
+          set -euo pipefail
+          curl -L https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION="${DAGGER_VERSION}" BIN_DIR=$HOME/.local/bin sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Frontend type check (svelte-check)
-        run: npm run check
+      - name: Validate Dagger CLI Version
+        env:
+          DAGGER_VERSION: ${{ needs.resolve-dagger-version.outputs.dagger_version }}
+        run: |
+          set -euo pipefail
+          hash -r
+          which dagger
+          ACTUAL_DAGGER_VERSION="$(dagger version | sed -n 's/.*v\([0-9][0-9.]*\).*/\1/p' | sed -n '1p')"
+          if [ "${ACTUAL_DAGGER_VERSION}" != "${DAGGER_VERSION}" ]; then
+            echo "Dagger CLI version mismatch: expected ${DAGGER_VERSION}, got ${ACTUAL_DAGGER_VERSION}"
+            exit 1
+          fi
 
-      - name: Build frontend static assets
-        run: npm run build
-
-      - name: Build Tauri app (No Bundle verification)
-        run: npm run tauri build -- --no-bundle
+      - name: Run Dagger CI
+        run: |
+          echo "Running full checks..."
+          dagger call run-all-checks --src=.
