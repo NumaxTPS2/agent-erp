@@ -21,7 +21,7 @@ jobs:
       dagger_version: ${{ steps.resolve.outputs.dagger_version }}
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Resolve Dagger Version
         id: resolve
@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Dagger (only for hosted runners)
         if: github.repository != 'NumaxTPS2/agent-erp'
