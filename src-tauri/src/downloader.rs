@@ -212,12 +212,10 @@ pub async fn get_installed_modules(app_handle: AppHandle) -> Result<Vec<ModuleMe
         .map_err(|e| e.to_string())?;
 
     let mut list = Vec::new();
-    for row in rows {
-        if let Ok(meta) = row {
-            // Verify file still exists on disk before offering it
-            if Path::new(&meta.file_path).exists() {
-                list.push(meta);
-            }
+    for meta in rows.flatten() {
+        // Verify file still exists on disk before offering it
+        if Path::new(&meta.file_path).exists() {
+            list.push(meta);
         }
     }
 

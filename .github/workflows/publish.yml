@@ -81,7 +81,10 @@ jobs:
     needs: publish-tauri
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ github.repository == 'NumaxTPS2/agent-erp'
+          && fromJSON('["self-hosted","coolify"]')
+          || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v6
 

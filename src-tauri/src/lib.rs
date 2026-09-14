@@ -4,8 +4,8 @@ use tauri::http::Response;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub mod auth;
-pub mod tps2_types;
 mod downloader;
+pub mod tps2_types;
 
 #[cfg(test)]
 thread_local! {
@@ -113,7 +113,10 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
     .map_err(|e| format!("Failed to create users table: {}", e))?;
 
     // Migration to add name column to users if it does not exist
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+        [],
+    );
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS tenants (
@@ -407,10 +410,8 @@ async fn get_mirrored_orders(app_handle: AppHandle) -> Result<serde_json::Value,
     }).map_err(|e| e.to_string())?;
 
     let mut list = Vec::new();
-    for r in rows {
-        if let Ok(val) = r {
-            list.push(val);
-        }
+    for val in rows.flatten() {
+        list.push(val);
     }
     Ok(serde_json::json!(list))
 }
@@ -434,10 +435,8 @@ async fn get_audit_logs(app_handle: AppHandle) -> Result<serde_json::Value, Stri
     }).map_err(|e| e.to_string())?;
 
     let mut list = Vec::new();
-    for r in rows {
-        if let Ok(val) = r {
-            list.push(val);
-        }
+    for val in rows.flatten() {
+        list.push(val);
     }
     Ok(serde_json::json!(list))
 }

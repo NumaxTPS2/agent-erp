@@ -50,7 +50,12 @@ impl TokenStore for KeyringTokenStore {
         let access_token = match entry_access.get_password() {
             Ok(pwd) => pwd,
             Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(e) => return Err(ApiError::KeychainError(format!("Keyring retrieve failed: {}", e))),
+            Err(e) => {
+                return Err(ApiError::KeychainError(format!(
+                    "Keyring retrieve failed: {}",
+                    e
+                )))
+            }
         };
 
         let entry_refresh = Entry::new("agent-erp-auth", "refresh_token")
@@ -58,7 +63,12 @@ impl TokenStore for KeyringTokenStore {
         let refresh_token = match entry_refresh.get_password() {
             Ok(pwd) => Some(pwd),
             Err(keyring::Error::NoEntry) => None,
-            Err(e) => return Err(ApiError::KeychainError(format!("Keyring retrieve failed: {}", e))),
+            Err(e) => {
+                return Err(ApiError::KeychainError(format!(
+                    "Keyring retrieve failed: {}",
+                    e
+                )))
+            }
         };
 
         Ok(Some(TokenPair {
@@ -544,7 +554,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 .password
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing password parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing password parameter".to_string())
+                })?;
 
             // Retrieve user credentials
             let mut stmt = conn
@@ -574,7 +586,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                          JOIN user_tenants ut ON t.id = ut.tenant_id
                          WHERE ut.user_id = ?1",
                         )
-                        .map_err(|e| ApiError::DatabaseError(format!("Query prep failed: {}", e)))?;
+                        .map_err(|e| {
+                            ApiError::DatabaseError(format!("Query prep failed: {}", e))
+                        })?;
 
                     let tenant_rows = stmt_tenants
                         .query_map([&id], |row| {
@@ -585,20 +599,18 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                                 role: Some(row.get::<_, String>(3)?),
                             })
                         })
-                        .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
+                        .map_err(|e| {
+                            ApiError::DatabaseError(format!("Query execute failed: {}", e))
+                        })?;
 
                     let mut tenants = Vec::new();
-                    for t in tenant_rows {
-                        if let Ok(val) = t {
-                            tenants.push(val);
-                        }
+                    for val in tenant_rows.flatten() {
+                        tenants.push(val);
                     }
 
                     let mock_token = format!("mock-token-{}", id);
                     let active_tenant_id = if tenants.len() == 1 {
-                        tenants
-                            .first()
-                            .and_then(|t| t.id.as_deref())
+                        tenants.first().and_then(|t| t.id.as_deref())
                     } else {
                         None
                     };
@@ -630,8 +642,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                         ..Default::default()
                     };
 
-                    serde_json::to_value(login_resp)
-                        .map_err(|e| ApiError::DatabaseError(format!("Serialization failed: {}", e)))
+                    serde_json::to_value(login_resp).map_err(|e| {
+                        ApiError::DatabaseError(format!("Serialization failed: {}", e))
+                    })
                 }
                 Err(_) => Err(ApiError::InvalidCredentials),
             }
@@ -641,30 +654,44 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
             let admin_name = body
                 .get("admin_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_name parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing admin_name parameter".to_string())
+                })?;
             let tenant_name = body
                 .get("tenant_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_name parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing tenant_name parameter".to_string())
+                })?;
             let company_name = body
                 .get("company_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing company_name parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing company_name parameter".to_string())
+                })?;
             let admin_email = body
                 .get("admin_email")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_email parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing admin_email parameter".to_string())
+                })?;
             let admin_password = body
                 .get("admin_password")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing admin_password parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing admin_password parameter".to_string())
+                })?;
             let tenant_code = body
                 .get("tenant_code")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing tenant_code parameter".to_string())
+                })?;
 
             if admin_name.trim().is_empty() {
-                return Err(ApiError::InvalidArgument("admin_name cannot be empty".to_string()));
+                return Err(ApiError::InvalidArgument(
+                    "admin_name cannot be empty".to_string(),
+                ));
             }
 
             if admin_password.len() < 8 {
@@ -703,7 +730,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
                 (&user_id, &tenant_id, "admin"),
             )
-            .map_err(|e| ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e)))?;
+            .map_err(|e| {
+                ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e))
+            })?;
 
             // Create session
             let mock_token = format!("mock-token-{}", user_id);
@@ -745,11 +774,11 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
             let tenant_id = body
                 .get("tenant_id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_id parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing tenant_id parameter".to_string())
+                })?;
 
-            let pair = token_store
-                .load()?
-                .ok_or(ApiError::InvalidCredentials)?;
+            let pair = token_store.load()?.ok_or(ApiError::InvalidCredentials)?;
             let token = pair.access_token;
 
             // Retrieve user from current session
@@ -778,7 +807,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
                 (&new_token, tenant_id, &token),
             )
-            .map_err(|e| ApiError::DatabaseError(format!("Failed to update session token: {}", e)))?;
+            .map_err(|e| {
+                ApiError::DatabaseError(format!("Failed to update session token: {}", e))
+            })?;
 
             Ok(json!({
                 "access_token": new_token,
@@ -791,20 +822,24 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
             let tenant_name = body
                 .get("tenant_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_name parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing tenant_name parameter".to_string())
+                })?;
             let company_name = body
                 .get("company_name")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing company_name parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing company_name parameter".to_string())
+                })?;
             let tenant_code = body
                 .get("tenant_code")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiError::InvalidArgument("Missing tenant_code parameter".to_string()))?;
+                .ok_or_else(|| {
+                    ApiError::InvalidArgument("Missing tenant_code parameter".to_string())
+                })?;
             let tax_id = body.get("tax_id").and_then(|v| v.as_str());
 
-            let pair = token_store
-                .load()?
-                .ok_or(ApiError::InvalidCredentials)?;
+            let pair = token_store.load()?.ok_or(ApiError::InvalidCredentials)?;
             let token = pair.access_token;
 
             // Retrieve user from current session
@@ -848,7 +883,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
                 (&user_id, &tenant_id, "admin"),
             )
-            .map_err(|e| ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e)))?;
+            .map_err(|e| {
+                ApiError::DatabaseError(format!("Failed to create user tenant relation: {}", e))
+            })?;
 
             // Update session with new active tenant and a new scoped token
             let new_token = format!("mock-scoped-token-{}", user_id);
@@ -856,7 +893,9 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 "UPDATE sessions SET token = ?1, active_tenant_id = ?2 WHERE token = ?3",
                 (&new_token, &tenant_id, &token),
             )
-            .map_err(|e| ApiError::DatabaseError(format!("Failed to update session token: {}", e)))?;
+            .map_err(|e| {
+                ApiError::DatabaseError(format!("Failed to update session token: {}", e))
+            })?;
 
             Ok(json!({
                 "access_token": new_token,
@@ -870,7 +909,10 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
 
         ("POST", "/v1/auth/logout") => {
             if let Ok(Some(pair)) = token_store.load() {
-                let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&pair.access_token]);
+                let _ = conn.execute(
+                    "DELETE FROM sessions WHERE token = ?1",
+                    [&pair.access_token],
+                );
             }
             Ok(json!({}))
         }
@@ -1033,10 +1075,8 @@ pub(crate) async fn execute_get_auth_status<R: tauri::Runtime, S: TokenStore>(
                     .map_err(|e| ApiError::DatabaseError(format!("Query execute failed: {}", e)))?;
 
                 let mut tenants = Vec::new();
-                for t in tenant_rows {
-                    if let Ok(val) = t {
-                        tenants.push(val);
-                    }
+                for val in tenant_rows.flatten() {
+                    tenants.push(val);
                 }
 
                 let active_tenant = if let Some(ref t_id) = active_tenant_id {
@@ -1092,7 +1132,10 @@ pub(crate) async fn execute_logout<R: tauri::Runtime, S: TokenStore>(
     } else if let Ok(Some(pair)) = token_store.load() {
         let db_path = crate::get_db_path(app_handle);
         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-            let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", [&pair.access_token]);
+            let _ = conn.execute(
+                "DELETE FROM sessions WHERE token = ?1",
+                [&pair.access_token],
+            );
         }
     }
 
@@ -1236,14 +1279,8 @@ mod tests {
         .unwrap();
 
         // When: user logs in with valid credentials
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/login",
-            &req_body,
-        )
-        .await;
+        let res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/auth/login", &req_body).await;
 
         // Then: login succeeds and returns display_name
         assert!(res.is_ok());
@@ -1288,20 +1325,17 @@ mod tests {
         .unwrap();
 
         // When: user logs in
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/login",
-            &req_body,
-        )
-        .await;
+        let res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/auth/login", &req_body).await;
 
         // Then: display_name falls back to email
         assert!(res.is_ok());
         let res_val = res.unwrap();
         let login_resp: V1LoginResponse = serde_json::from_value(res_val).unwrap();
-        assert_eq!(login_resp.display_name.as_deref(), Some("noname@example.com"));
+        assert_eq!(
+            login_resp.display_name.as_deref(),
+            Some("noname@example.com")
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1324,14 +1358,8 @@ mod tests {
         });
 
         // When: calling internal execute_api_call with wrong password
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/login",
-            &req_body,
-        )
-        .await;
+        let res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/auth/login", &req_body).await;
 
         // Then: returns ApiError::InvalidCredentials enum variant
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
@@ -1373,7 +1401,10 @@ mod tests {
         .await;
 
         // Then: returns InvalidArgument error
-        assert!(matches!(res_no_email.unwrap_err(), ApiError::InvalidArgument(_)));
+        assert!(matches!(
+            res_no_email.unwrap_err(),
+            ApiError::InvalidArgument(_)
+        ));
 
         // When: calling login with empty email
         let res_empty_email = execute_api_call(
@@ -1389,7 +1420,10 @@ mod tests {
         .await;
 
         // Then: returns InvalidArgument error
-        assert!(matches!(res_empty_email.unwrap_err(), ApiError::InvalidArgument(_)));
+        assert!(matches!(
+            res_empty_email.unwrap_err(),
+            ApiError::InvalidArgument(_)
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1614,7 +1648,9 @@ mod tests {
         )
         .unwrap();
 
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         // When: Perform select-tenant call
         let req_body = json!({
@@ -1661,7 +1697,9 @@ mod tests {
         )
         .unwrap();
 
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         let req_body = json!({
             "tenant_id": "tnt2"
@@ -1722,14 +1760,8 @@ mod tests {
             "email": "test@example.com",
             "password": "password123"
         });
-        let login_res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/login",
-            &req_body,
-        )
-        .await;
+        let login_res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/auth/login", &req_body).await;
         assert!(login_res.is_ok());
 
         // Then: Get auth status should indicate needs_tenant_selection
@@ -1761,7 +1793,9 @@ mod tests {
         )
         .unwrap();
 
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         let req_body = json!({
             "tenant_name": "New Tenant",
@@ -1796,7 +1830,9 @@ mod tests {
         assert_eq!(pair.access_token, "mock-scoped-token-u1");
 
         // Verify status is authenticated
-        let status_res = execute_get_auth_status(&handle, &token_store).await.unwrap();
+        let status_res = execute_get_auth_status(&handle, &token_store)
+            .await
+            .unwrap();
         assert_eq!(status_res.status, "authenticated");
         assert_eq!(status_res.active_tenant.unwrap().code, "new_tnt");
     }
@@ -1825,7 +1861,9 @@ mod tests {
         )
         .unwrap();
 
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         let req_body = json!({
             "tenant_name": "New Tenant",
@@ -1895,17 +1933,13 @@ mod tests {
         )
         .unwrap();
 
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         // When: calling execute_api_call with logout path
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/auth/logout",
-            &json!({}),
-        )
-        .await;
+        let res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/auth/logout", &json!({})).await;
 
         // Then: the call should succeed
         assert!(res.is_ok());
@@ -1926,17 +1960,13 @@ mod tests {
         // Given: mock token stored in token_store
         let handle = setup_test_db();
         let token_store = InMemoryTokenStore::new();
-        token_store.save("mock-token-u1", "mock-refresh-u1").unwrap();
+        token_store
+            .save("mock-token-u1", "mock-refresh-u1")
+            .unwrap();
 
         // When: calling execute_api_call with an endpoint that returns invalid credentials
-        let res = execute_api_call(
-            &handle,
-            &token_store,
-            "POST",
-            "/v1/test/expire",
-            &json!({}),
-        )
-        .await;
+        let res =
+            execute_api_call(&handle, &token_store, "POST", "/v1/test/expire", &json!({})).await;
 
         // Then: returns ApiError::InvalidCredentials
         assert_eq!(res.unwrap_err(), ApiError::InvalidCredentials);
@@ -1950,7 +1980,9 @@ mod tests {
         // Given: setup test database, seed previous active token
         let handle = setup_test_db();
         let token_store = InMemoryTokenStore::new();
-        token_store.save("mock-token-prev", "mock-refresh-prev").unwrap();
+        token_store
+            .save("mock-token-prev", "mock-refresh-prev")
+            .unwrap();
 
         // When: login fails with invalid credentials
         let res = execute_api_call(
@@ -2423,13 +2455,30 @@ mod tests {
         let token_store = InMemoryTokenStore::new();
 
         // When: invoking unsupported HTTP method
-        let res_method = call_real_tps2(&token_store, "http://127.0.0.1:9", "PATCH", "/v1/auth", &Value::Null).await;
+        let res_method = call_real_tps2(
+            &token_store,
+            "http://127.0.0.1:9",
+            "PATCH",
+            "/v1/auth",
+            &Value::Null,
+        )
+        .await;
 
         // Then: returns InvalidArgument
-        assert!(matches!(res_method.unwrap_err(), ApiError::InvalidArgument(_)));
+        assert!(matches!(
+            res_method.unwrap_err(),
+            ApiError::InvalidArgument(_)
+        ));
 
         // When: invoking invalid/unreachable host
-        let res_net = call_real_tps2(&token_store, "http://127.0.0.1:1", "GET", "/v1/auth", &Value::Null).await;
+        let res_net = call_real_tps2(
+            &token_store,
+            "http://127.0.0.1:1",
+            "GET",
+            "/v1/auth",
+            &Value::Null,
+        )
+        .await;
 
         // Then: returns NetworkError
         assert!(matches!(res_net.unwrap_err(), ApiError::NetworkError(_)));
@@ -2479,8 +2528,8 @@ mod tests {
 
     #[test]
     fn test_export_specta_bindings() {
-        let builder = tauri_specta::Builder::<tauri::Wry>::new()
-            .commands(tauri_specta::collect_commands![
+        let builder =
+            tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
                 api_call::<tauri::Wry>,
                 get_auth_status::<tauri::Wry>,
                 logout::<tauri::Wry>
