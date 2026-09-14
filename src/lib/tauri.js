@@ -272,7 +272,9 @@ export async function invoke(cmd, args = {}) {
           active_tenant_id: tenants.length === 1 ? tenants[0].id : null
         };
         return {
-          user: { id: user.id, email: user.email, display_name: user.name || user.email },
+          user_id: user.id,
+          email: user.email,
+          display_name: user.name || user.email,
           tenants
         };
       }
