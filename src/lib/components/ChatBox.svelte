@@ -1,5 +1,10 @@
 <script>
-  import { appState } from '../store.svelte.js';
+  import { 
+    appState, 
+    switchActiveTask, 
+    appendTaskMessageAction, 
+    completeDepartmentSetupTask 
+  } from '../store.svelte.js';
   import { Channel, invoke } from '../tauri.js';
   import { tick } from 'svelte';
 
@@ -7,9 +12,25 @@
   let chatEnd = $state(null);
   let selectedModel = $state('gemini-3.5-flash');
 
+  let activeTask = $derived(
+    appState.activeTaskId ? appState.tasks.find(t => t.id === appState.activeTaskId) : null
+  );
+
+  let currentMessages = $derived(
+    appState.activeTaskId 
+      ? (appState.taskMessages[appState.activeTaskId] || [])
+      : (appState.taskMessages['main'] && appState.taskMessages['main'].length > 0 
+          ? appState.taskMessages['main'] 
+          : appState.chatMessages)
+  );
+
+  let pendingTasks = $derived(
+    appState.tasks.filter(t => t.status === 'pending' || t.status === 'in_progress')
+  );
+
   // Auto scroll chat to bottom when message arrives
   $effect(() => {
-    if (appState.chatMessages.length || appState.currentStreamContent) {
+    if (currentMessages.length || appState.currentStreamContent) {
       tick().then(() => {
         chatEnd?.scrollIntoView({ behavior: 'smooth' });
       });
@@ -20,24 +41,35 @@
     if (e) e.preventDefault();
     if (!inputVal.trim() || appState.isChatStreaming) return;
 
-    const userMessage = inputVal;
+    const userMessage = inputVal.trim();
     inputVal = '';
 
-    // Add user message to history
-    appState.chatMessages.push({ role: 'user', content: userMessage });
-    
-    // Set streaming state
+    const currentTaskId = appState.activeTaskId;
+
+    // Append user message
+    await appendTaskMessageAction(currentTaskId, 'user', userMessage);
+
+    // If inside "設定部門" subtask and user types to add department
+    if (currentTaskId && activeTask && activeTask.title.includes('設定部門')) {
+      if (activeTask.status !== 'done') {
+        const deptName = userMessage.includes('部') ? userMessage.replace(/.*(新增|建立|要|加)/, '').trim() || '銷售部' : '銷售部';
+        await completeDepartmentSetupTask(currentTaskId, deptName);
+        return;
+      }
+    }
+
+    // Default chat streaming response
     appState.isChatStreaming = true;
     appState.currentStreamContent = '';
 
     const channel = new Channel();
-    channel.onmessage = (chunk) => {
-      // Chunk is { token: string, done: boolean }
+    channel.onmessage = async (chunk) => {
       appState.currentStreamContent += chunk.token;
       if (chunk.done) {
-        appState.chatMessages.push({ role: 'assistant', content: appState.currentStreamContent });
+        const streamText = appState.currentStreamContent;
         appState.currentStreamContent = '';
         appState.isChatStreaming = false;
+        await appendTaskMessageAction(currentTaskId, 'assistant', streamText);
       }
     };
 
@@ -49,18 +81,45 @@
       });
     } catch (err) {
       console.error("Failed to stream chat:", err);
-      appState.chatMessages.push({ role: 'assistant', content: '對話串流連線失敗，請檢查 Rust 後端日誌。' });
+      await appendTaskMessageAction(currentTaskId, 'assistant', '對話串流連線失敗，請檢查 Rust 後端日誌。');
       appState.isChatStreaming = false;
     }
+  }
+
+  function handleTaskClick(taskId) {
+    switchActiveTask(taskId);
+  }
+
+  function handleBackToMain() {
+    switchActiveTask(null);
   }
 </script>
 
 <div class="chat-container">
   <div class="chat-header">
-    <div class="chat-agent-title">
-      <span class="pulse-icon"></span>
-      <h3>AI Agent 協同對話</h3>
-    </div>
+    {#if appState.activeTaskId}
+      <div class="subtask-header-row">
+        <button class="back-btn" onclick={handleBackToMain} title="返回主 Agent 環境對話">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+          <span>主環境</span>
+        </button>
+        <div class="subtask-title-wrap">
+          <span class="pulse-icon subtask"></span>
+          <span class="subtask-title font-bold">{activeTask ? activeTask.title : '子任務對話'}</span>
+        </div>
+        {#if activeTask}
+          <span class="badge {activeTask.status === 'done' ? 'badge-emerald' : 'badge-amber'}">
+            {activeTask.status === 'done' ? '已完成' : '處理中'}
+          </span>
+        {/if}
+      </div>
+    {:else}
+      <div class="chat-agent-title">
+        <span class="pulse-icon"></span>
+        <h3>AI Agent 協同對話（主環境）</h3>
+      </div>
+    {/if}
+
     <select class="model-select" bind:value={selectedModel}>
       <option value="gemini-3.5-flash">Gemini 3.5 Flash (BYOK)</option>
       <option value="deepseek-v3">DeepSeek V3 (BYOK)</option>
@@ -70,19 +129,69 @@
   </div>
 
   <div class="chat-messages-scroll">
-    {#each appState.chatMessages as msg}
+    {#each currentMessages as msg}
       <div class="message-row {msg.role}">
         <div class="message-bubble {msg.role}">
-          <div class="message-meta">{msg.role === 'user' ? (appState.authUser?.display_name || appState.authUser?.email || '操作者') : 'AgentERP 專家'}</div>
+          <div class="message-meta">
+            {#if msg.role === 'user'}
+              {appState.authUser?.display_name || appState.authUser?.email || '操作者'}
+            {:else if appState.activeTaskId}
+              {activeTask?.title} 子 Agent
+            {:else}
+              AgentERP 主助理
+            {/if}
+          </div>
           <div class="message-body">{msg.content}</div>
         </div>
       </div>
     {/each}
 
+    <!-- Main Ambient Chat: Render Quick Task Cards if available and on main chat -->
+    {#if !appState.activeTaskId && pendingTasks.length > 0}
+      <div class="task-cards-container">
+        <div class="task-cards-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+          <span>待處理任務清單（點擊進入子 Agent 對話）：</span>
+        </div>
+        {#each appState.tasks as task}
+          <button 
+            type="button"
+            class="task-card-item {task.status === 'done' ? 'task-done' : ''}" 
+            onclick={() => handleTaskClick(task.id)}
+          >
+            <div class="task-card-top">
+              <span class="task-card-title">{task.parent_task_id ? '└ ' + task.title : '📁 ' + task.title}</span>
+              <span class="badge {task.status === 'done' ? 'badge-emerald' : 'badge-amber'}">
+                {task.status === 'done' ? '已完成' : '待處理'}
+              </span>
+            </div>
+            <div class="task-card-footer">
+              <span>指派：{task.assignee}</span>
+              <span class="task-enter-hint">進入對話 →</span>
+            </div>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    <!-- Subtask View: Interactive Quick Action Button for Department Setup -->
+    {#if appState.activeTaskId && activeTask && activeTask.title.includes('設定部門') && activeTask.status !== 'done'}
+      <div class="subtask-quick-action glass-panel">
+        <div class="quick-action-title">🏢 快速建立部門引導</div>
+        <p class="quick-action-desc">點擊下方按鈕可快速建立「銷售部」並將結果自動摘要回報給主 Agent：</p>
+        <button 
+          class="btn btn-primary btn-sm" 
+          onclick={() => completeDepartmentSetupTask(activeTask.id, '銷售部')}
+        >
+          ✨ 建立「銷售部」並完成任務
+        </button>
+      </div>
+    {/if}
+
     {#if appState.isChatStreaming}
       <div class="message-row assistant streaming">
         <div class="message-bubble assistant">
-          <div class="message-meta">AgentERP 專家 (串流中...)</div>
+          <div class="message-meta">{appState.activeTaskId ? (activeTask?.title + ' 子 Agent') : 'AgentERP 主助理'} (串流中...)</div>
           <div class="message-body">{appState.currentStreamContent} <span class="cursor-blink">▋</span></div>
         </div>
       </div>
@@ -94,11 +203,11 @@
     <input 
       type="text" 
       class="chat-input" 
-      placeholder="輸入指令詢問 AI..." 
+      placeholder={appState.activeTaskId ? `對「${activeTask?.title || '此任務'}」輸入指令...` : "輸入指令詢問主 Agent..."} 
       bind:value={inputVal}
       disabled={appState.isChatStreaming} 
     />
-    <button type="submit" class="chat-send-btn" disabled={appState.isChatStreaming || !inputVal.trim()}>
+    <button type="submit" class="chat-send-btn" aria-label="傳送訊息" disabled={appState.isChatStreaming || !inputVal.trim()}>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
     </button>
   </form>
@@ -134,6 +243,48 @@
     font-weight: 600;
   }
 
+  .subtask-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .subtask-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-grow: 1;
+    overflow: hidden;
+  }
+
+  .subtask-title {
+    font-size: 0.95rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .back-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .back-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+  }
+
   .pulse-icon {
     width: 8px;
     height: 8px;
@@ -141,6 +292,11 @@
     border-radius: 50%;
     box-shadow: 0 0 8px rgb(var(--accent-cyan));
     animation: pulse 2s infinite;
+  }
+
+  .pulse-icon.subtask {
+    background: rgb(147, 51, 234);
+    box-shadow: 0 0 8px rgb(147, 51, 234);
   }
 
   @keyframes pulse {
@@ -215,6 +371,93 @@
     word-break: break-word;
   }
 
+  .task-cards-container {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .task-cards-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .task-card-item {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .task-card-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(var(--accent-rgb), 0.4);
+    transform: translateY(-1px);
+  }
+
+  .task-card-item.task-done {
+    opacity: 0.7;
+    background: rgba(16, 185, 129, 0.04);
+    border-color: rgba(16, 185, 129, 0.2);
+  }
+
+  .task-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .task-card-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .task-card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .task-enter-hint {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .subtask-quick-action {
+    padding: 14px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(var(--accent-rgb), 0.3);
+    background: rgba(var(--accent-rgb), 0.05);
+  }
+
+  .quick-action-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+  }
+
+  .quick-action-desc {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+    line-height: 1.4;
+  }
+
   .chat-input-row {
     padding: 16px;
     border-top: 1px solid var(--border-color);
@@ -273,3 +516,4 @@
     50% { opacity: 0; }
   }
 </style>
+

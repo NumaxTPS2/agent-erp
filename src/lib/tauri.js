@@ -34,6 +34,25 @@ let mockUserTenants = [
 ];
 let mockSessions = null; // { token, user_id, active_tenant_id }
 
+function loadStorage(key, defaultVal) {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+  }
+  return defaultVal;
+}
+
+function saveStorage(key, val) {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+  }
+}
+
+let mockTasks = loadStorage('agent_erp_mock_tasks', []);
+let mockTaskMessages = loadStorage('agent_erp_mock_task_messages', []);
+
 let mockLlmProviders = [
   { id: "openai", label: "OpenAI GPT-4o", base_url: "https://api.openai.com/v1", model_name: "gpt-4o", requires_key: true, has_key: false, active: true },
   { id: "deepseek", label: "DeepSeek V3 (BYOK)", base_url: "https://api.deepseek.com/v1", model_name: "deepseek-chat", requires_key: true, has_key: false, active: false },
@@ -366,6 +385,74 @@ export async function invoke(cmd, args = {}) {
     case 'logout': {
       mockSessions = null;
       return null;
+    }
+
+    case 'create_task': {
+      const { title, moduleId, assignee, parentTaskId } = args;
+      const now = Math.floor(Date.now() / 1000);
+      const newTask = {
+        id: `task_${now}_${Math.floor(1000 + Math.random() * 9000)}`,
+        title: (title || '').trim(),
+        status: 'pending',
+        parent_task_id: parentTaskId || null,
+        module_id: (moduleId || '').trim(),
+        assignee: (assignee || '').trim(),
+        created_at: now,
+        completed_at: null
+      };
+      mockTasks.push(newTask);
+      saveStorage('agent_erp_mock_tasks', mockTasks);
+      return newTask;
+    }
+
+    case 'list_tasks': {
+      const { moduleId } = args;
+      const trimmedModule = (moduleId || '').trim();
+      if (!trimmedModule) {
+        return [...mockTasks];
+      }
+      return mockTasks.filter(t => t.module_id === trimmedModule);
+    }
+
+    case 'update_task_status': {
+      const { taskId, status } = args;
+      const validStatuses = ['pending', 'in_progress', 'done', 'cancelled'];
+      if (!validStatuses.includes(status)) {
+        throw new Error(`Invalid task status: ${status}`);
+      }
+      const task = mockTasks.find(t => t.id === taskId);
+      if (!task) {
+        throw new Error(`Task not found: ${taskId}`);
+      }
+      task.status = status;
+      task.completed_at = status === 'done' ? Math.floor(Date.now() / 1000) : null;
+      saveStorage('agent_erp_mock_tasks', mockTasks);
+      return null;
+    }
+
+    case 'append_task_message': {
+      const { taskId, role, content } = args;
+      if (!taskId) throw new Error('Task ID cannot be empty');
+      if (!content) throw new Error('Message content cannot be empty');
+      const now = Math.floor(Date.now() / 1000);
+      const newMsg = {
+        id: `msg_${now}_${Math.floor(1000 + Math.random() * 9000)}`,
+        task_id: taskId.trim(),
+        role: (role || 'user').trim(),
+        content: content.trim(),
+        timestamp: now
+      };
+      mockTaskMessages.push(newMsg);
+      saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
+      return null;
+    }
+
+    case 'get_task_messages': {
+      const { taskId } = args;
+      const filtered = mockTaskMessages
+        .filter(m => m.task_id === (taskId || '').trim())
+        .sort((a, b) => a.timestamp - b.timestamp);
+      return filtered;
     }
     
     default:

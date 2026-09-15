@@ -55,6 +55,14 @@ export const appState = $state({
   isChatStreaming: false,
   currentStreamContent: '',
 
+  // Task-driven workflow state
+  /** @type {any[]} */
+  tasks: [],
+  /** @type {string | null} */
+  activeTaskId: null, // null = 主 Agent 環境對話；字串 = 子任務對話
+  /** @type {Record<string, Array<{ role: string, content: string, timestamp?: number }>>} */
+  taskMessages: {},
+
   // Database cache lists
   /** @type {any[]} */
   mirroredOrders: [],
@@ -548,7 +556,160 @@ export async function createTenantAction(tenantName, companyName, tenantCode, ta
     tax_id: taxId
   });
   await checkAuthStatus();
+
+  // Automatically create initial onboarding parent & child tasks
+  try {
+    const parentTask = await createTaskAction('新租戶起步', 'sales', '主管', null);
+    const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
+    // Seed initial child task guidance message
+    await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
+  } catch (e) {
+    console.warn("Failed to create onboarding tasks on tenant creation:", e);
+  }
+
   return res;
+}
+
+/**
+ * Fetch tasks from SQLite
+ * @param {string} [moduleId]
+ * @returns {Promise<any[]>}
+ */
+export async function fetchTasks(moduleId = 'sales') {
+  try {
+    const list = await invoke('list_tasks', { moduleId });
+    appState.tasks = list || [];
+    return appState.tasks;
+  } catch (err) {
+    console.error("Failed to fetch tasks:", err);
+    return [];
+  }
+}
+
+/**
+ * Create a task
+ * @param {string} title
+ * @param {string} moduleId
+ * @param {string} assignee
+ * @param {string | null} [parentTaskId]
+ * @returns {Promise<any>}
+ */
+export async function createTaskAction(title, moduleId, assignee, parentTaskId = null) {
+  try {
+    const task = await invoke('create_task', {
+      title,
+      moduleId,
+      assignee,
+      parentTaskId: parentTaskId || null
+    });
+    await fetchTasks(moduleId);
+    return task;
+  } catch (err) {
+    console.error("Failed to create task:", err);
+    throw err;
+  }
+}
+
+/**
+ * Switch active task conversation
+ * @param {string | null} taskId
+ */
+export async function switchActiveTask(taskId) {
+  appState.activeTaskId = taskId;
+  const targetKey = taskId || 'main';
+  try {
+    const msgs = await invoke('get_task_messages', { taskId: targetKey });
+    appState.taskMessages[targetKey] = msgs || [];
+    if (!taskId) {
+      if (msgs && msgs.length > 0) {
+        appState.chatMessages = msgs;
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to fetch messages for ${targetKey}:`, err);
+  }
+}
+
+/**
+ * Append message to task conversation
+ * @param {string} taskId
+ * @param {string} role
+ * @param {string} content
+ */
+export async function appendTaskMessageAction(taskId, role, content) {
+  const targetKey = taskId || 'main';
+  try {
+    await invoke('append_task_message', { taskId: targetKey, role, content });
+    if (!appState.taskMessages[targetKey]) {
+      appState.taskMessages[targetKey] = [];
+    }
+    appState.taskMessages[targetKey].push({
+      role,
+      content,
+      timestamp: Math.floor(Date.now() / 1000)
+    });
+    if (targetKey === 'main' || !appState.activeTaskId) {
+      appState.chatMessages = [...appState.taskMessages['main']];
+    }
+  } catch (err) {
+    console.error("Failed to append task message:", err);
+  }
+}
+
+/**
+ * Update task status
+ * @param {string} taskId
+ * @param {string} status
+ */
+export async function updateTaskStatusAction(taskId, status) {
+  try {
+    await invoke('update_task_status', { taskId, status });
+    await fetchTasks(appState.activeWorkspace || 'sales');
+  } catch (err) {
+    console.error("Failed to update task status:", err);
+  }
+}
+
+/**
+ * Complete department setup task and report back to main agent
+ * @param {string} taskId
+ * @param {string} [departmentName]
+ */
+export async function completeDepartmentSetupTask(taskId, departmentName = '銷售部') {
+  try {
+    await updateTaskStatusAction(taskId, 'done');
+    await appendTaskMessageAction(taskId, 'assistant', `已為您成功建立「${departmentName}」！此子任務已圓滿完成。`);
+    // Report summary to main agent ambient conversation
+    await appendTaskMessageAction('main', 'assistant', `✅「設定部門」已完成，新增了『${departmentName}』`);
+    showToast(`「設定部門」任務已完成！結果已回報至主 Agent。`);
+  } catch (err) {
+    console.error("Failed to complete department setup task:", err);
+    showToast(`完成任務失敗: ${err}`);
+  }
+}
+
+/**
+ * Initialize main chat greeting based on pending tasks count
+ */
+export async function initMainChatGreeting() {
+  try {
+    const tasks = await fetchTasks(appState.activeWorkspace || 'sales');
+    const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
+    
+    const mainMsgs = await invoke('get_task_messages', { taskId: 'main' });
+    if (!mainMsgs || mainMsgs.length === 0) {
+      const greeting = pendingCount > 0
+        ? `你好，我是 AgentERP 智能助理。您目前有 ${pendingCount} 筆待處理任務。想從下方的任務開始，或直接跟我說您需要什麼協助：`
+        : `你好，我是 AgentERP 智能助理。我已經載入本地安全邊緣工作站上下文，隨時可以為您服務。`;
+      
+      await appendTaskMessageAction('main', 'assistant', greeting);
+    } else {
+      appState.taskMessages['main'] = mainMsgs;
+      appState.chatMessages = [...mainMsgs];
+    }
+  } catch (err) {
+    console.error("Failed to init main chat greeting:", err);
+  }
 }
 
 export async function simulateTokenExpiry() {

@@ -5,6 +5,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 pub mod auth;
 mod downloader;
+pub mod tasks;
 pub mod tps2_types;
 
 #[cfg(test)]
@@ -154,6 +155,9 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
         [],
     )
     .map_err(|e| format!("Failed to create sessions table: {}", e))?;
+
+    tasks::create_tasks_tables(&conn)
+        .map_err(|e| format!("Failed to create tasks tables: {}", e))?;
 
     // Seed mock order if empty
     let mut stmt = conn
@@ -522,7 +526,12 @@ pub fn run() {
             downloader::uninstall_module,
             auth::api_call,
             auth::get_auth_status,
-            auth::logout
+            auth::logout,
+            tasks::create_task,
+            tasks::list_tasks,
+            tasks::update_task_status,
+            tasks::append_task_message,
+            tasks::get_task_messages
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,7 +15,9 @@
     navigate,
     checkAuthStatus,
     logoutAction,
-    simulateTokenExpiry
+    simulateTokenExpiry,
+    fetchTasks,
+    initMainChatGreeting
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import MutationDialog from './lib/components/MutationDialog.svelte';
@@ -36,6 +38,8 @@
     await fetchAuditLogs();
     await fetchInstalledModules();
     await fetchModulesGallery();
+    await fetchTasks(appState.activeWorkspace || 'sales');
+    await initMainChatGreeting();
     isInitialized = true;
   }
 
