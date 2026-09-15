@@ -502,6 +502,30 @@ export async function login(email, password) {
  * @param {string} tenantCode
  * @returns {Promise<any>}
  */
+/**
+ * Shared helper to seed onboarding parent and child tasks
+ * @param {string} tenantName
+ */
+export async function seedOnboardingTasks(tenantName) {
+  try {
+    const parentTask = await createTaskAction('新租戶起步', 'sales', '主管', null);
+    const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
+    // Seed initial child task guidance message
+    await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
+  } catch (e) {
+    console.warn("Failed to create onboarding tasks on tenant creation:", e);
+  }
+}
+
+/**
+ * @param {string} adminName
+ * @param {string} tenantName
+ * @param {string} companyName
+ * @param {string} adminEmail
+ * @param {string} adminPassword
+ * @param {string} tenantCode
+ * @returns {Promise<any>}
+ */
 export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode) {
   const res = await apiCall('POST', '/v1/auth/register-tenant', {
     admin_name: adminName,
@@ -512,6 +536,7 @@ export async function registerTenant(adminName, tenantName, companyName, adminEm
     tenant_code: tenantCode
   });
   await checkAuthStatus();
+  await seedOnboardingTasks(tenantName);
   return res;
 }
 
@@ -556,17 +581,7 @@ export async function createTenantAction(tenantName, companyName, tenantCode, ta
     tax_id: taxId
   });
   await checkAuthStatus();
-
-  // Automatically create initial onboarding parent & child tasks
-  try {
-    const parentTask = await createTaskAction('新租戶起步', 'sales', '主管', null);
-    const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
-    // Seed initial child task guidance message
-    await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
-  } catch (e) {
-    console.warn("Failed to create onboarding tasks on tenant creation:", e);
-  }
-
+  await seedOnboardingTasks(tenantName);
   return res;
 }
 

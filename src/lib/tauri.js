@@ -32,7 +32,11 @@ let mockUserTenants = [
   { user_id: "usr_mock_admin", tenant_id: "tnt_mock_1", role: "admin" },
   { user_id: "usr_mock_admin", tenant_id: "tnt_mock_2", role: "member" }
 ];
-let mockSessions = null; // { token, user_id, active_tenant_id }
+let mockSessions = loadStorage('agent_erp_mock_session', {
+  token: "mock-token-admin",
+  user_id: "usr_mock_admin",
+  active_tenant_id: "tnt_mock_1"
+});
 
 function loadStorage(key, defaultVal) {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -50,8 +54,57 @@ function saveStorage(key, val) {
   }
 }
 
-let mockTasks = loadStorage('agent_erp_mock_tasks', []);
-let mockTaskMessages = loadStorage('agent_erp_mock_task_messages', []);
+const defaultMockTasks = [
+  {
+    id: "task_parent_1",
+    title: "新租戶起步",
+    status: "in_progress",
+    parent_task_id: null,
+    module_id: "sales",
+    assignee: "主管",
+    created_at: Math.floor(Date.now() / 1000) - 3600,
+    completed_at: null
+  },
+  {
+    id: "task_sub_1",
+    title: "設定部門",
+    status: "pending",
+    parent_task_id: "task_parent_1",
+    module_id: "sales",
+    assignee: "主管",
+    created_at: Math.floor(Date.now() / 1000) - 3600,
+    completed_at: null
+  }
+];
+
+const defaultMockTaskMessages = [
+  {
+    id: "msg_main_1",
+    task_id: "main",
+    role: "assistant",
+    content: "你好，我是 AgentERP 智能助理。已載入本地安全邊緣工作站上下文。您目前有 2 筆待處理任務、1 則未讀通知。想從下面的常用任務開始，或直接跟我說您需要什麼協助：",
+    timestamp: Math.floor(Date.now() / 1000) - 3600
+  },
+  {
+    id: "msg_sub_1",
+    task_id: "task_sub_1",
+    role: "assistant",
+    content: "您好！我是部門設定助理。新租戶建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？",
+    timestamp: Math.floor(Date.now() / 1000) - 3600
+  }
+];
+
+let mockTasks = loadStorage('agent_erp_mock_tasks', defaultMockTasks);
+if (!mockTasks || mockTasks.length === 0) {
+  mockTasks = defaultMockTasks;
+  saveStorage('agent_erp_mock_tasks', mockTasks);
+}
+
+let mockTaskMessages = loadStorage('agent_erp_mock_task_messages', defaultMockTaskMessages);
+if (!mockTaskMessages || mockTaskMessages.length === 0) {
+  mockTaskMessages = defaultMockTaskMessages;
+  saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
+}
 
 let mockLlmProviders = [
   { id: "openai", label: "OpenAI GPT-4o", base_url: "https://api.openai.com/v1", model_name: "gpt-4o", requires_key: true, has_key: false, active: true },
@@ -290,6 +343,7 @@ export async function invoke(cmd, args = {}) {
           user_id: user.id,
           active_tenant_id: tenants.length === 1 ? tenants[0].id : null
         };
+        saveStorage('agent_erp_mock_session', mockSessions);
         return {
           user_id: user.id,
           email: user.email,
@@ -318,6 +372,7 @@ export async function invoke(cmd, args = {}) {
           user_id,
           active_tenant_id: tenant_id
         };
+        saveStorage('agent_erp_mock_session', mockSessions);
         return {
           user: { id: user_id, email: admin_email, display_name: admin_name.trim() },
           tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
@@ -338,6 +393,7 @@ export async function invoke(cmd, args = {}) {
         // Generate new mock scoped token
         const new_token = `mock-scoped-token-${mockSessions.user_id}`;
         mockSessions.token = new_token;
+        saveStorage('agent_erp_mock_session', mockSessions);
 
         return {
           access_token: new_token,
