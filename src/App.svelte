@@ -73,7 +73,7 @@
     } else {
       // Authenticated
       if (appState.route === '/login' || appState.route === '/register') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       }
       await initializeAppData();
     }
@@ -83,7 +83,7 @@
       const hash = location.hash.slice(1);
       if (!hash) {
         if (appState.authStatus === 'authenticated') {
-          navigate('/app/sales');
+          navigate('/app/agent');
         } else {
           navigate('/login');
         }
@@ -141,7 +141,8 @@
   });
 
   function selectWorkspace(ws) {
-    if (ws === 'sales') navigate('/app/sales');
+    if (ws === 'agent') navigate('/app/agent');
+    else if (ws === 'sales') navigate('/app/sales');
     else if (ws === 'finance') navigate('/app/finance');
     else if (ws === 'crm') navigate('/app/crm');
     else if (ws === 'settings') navigate('/app/settings');
@@ -194,7 +195,7 @@
       <!-- 1. Left Sidebar Rail (64px) -->
       <aside class="sidebar-rail">
         <div class="rail-top">
-          <button class="rail-brand-logo" onclick={() => selectWorkspace('sales')} title="AgentERP Edge">
+          <button class="rail-brand-logo" onclick={() => selectWorkspace('agent')} title="AgentERP Edge">
             A
           </button>
 

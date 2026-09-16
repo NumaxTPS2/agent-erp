@@ -80,7 +80,7 @@
     try {
       await registerTenant(adminName.trim(), tenantName, companyName, adminEmail, adminPassword, tenantCode);
       if (appState.authStatus === 'authenticated') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       } else if (appState.authStatus === 'needs_tenant_creation') {
         navigate('/onboarding');
       } else if (appState.authStatus === 'needs_tenant_selection') {

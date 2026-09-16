@@ -60,7 +60,7 @@
     try {
       await createTenantAction(tenantName, companyName, tenantCode, taxId);
       if (appState.authStatus === 'authenticated') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       } else {
         errorMessage = '建立成功但狀態未同步，請重新登入';
       }

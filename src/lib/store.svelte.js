@@ -13,7 +13,7 @@ import { loadModule } from './registry.js';
 
 // Define the global reactive app state using Svelte 5 $state
 export const appState = $state({
-  route: '/app/sales',
+  route: '/app/agent',
   version: '0.1.0',
   isEnterpriseActive: false,
   /** @type {any[]} */
@@ -32,7 +32,7 @@ export const appState = $state({
     const match = this.route.match(/^\/app\/([^/]+)$/);
     if (match) return match[1];
     
-    return 'sales';
+    return 'agent';
   },
 
   set activeWorkspace(ws) {

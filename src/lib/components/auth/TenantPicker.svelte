@@ -19,7 +19,7 @@
     try {
       await selectTenantAction(tenantId);
       if (appState.authStatus === 'authenticated') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       } else {
         errorMessage = '無法切換到選定的租戶，請重新登入';
       }

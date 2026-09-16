@@ -27,7 +27,7 @@
       await login(email, password);
       // Determine where to navigate based on new auth status
       if (appState.authStatus === 'authenticated') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       } else if (appState.authStatus === 'needs_tenant_creation') {
         navigate('/onboarding');
       } else if (appState.authStatus === 'needs_tenant_selection') {
