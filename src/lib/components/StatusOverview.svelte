@@ -6,7 +6,7 @@
   );
 
   let unreadNotificationsCount = $derived(
-    appState.notifications.length > 0 ? appState.notifications.length : 1
+    appState.notifications.length
   );
 
   // Sample or live notifications matching system design
@@ -21,25 +21,7 @@
         time: n.time || '剛剛'
       }));
     }
-    // Default reference notifications
-    return [
-      {
-        id: 'notif-1',
-        level: 'alert',
-        dot: '🔴',
-        title: '超預算採購需要您核准',
-        message: '大同國中採購已超過本學年度預算',
-        time: '剛剛'
-      },
-      {
-        id: 'notif-2',
-        level: 'warning',
-        dot: '🟡',
-        title: '已通知財會人員',
-        message: '請款草稿已生成，等待財會確認',
-        time: '14:03'
-      }
-    ];
+    return [];
   });
 </script>
 
@@ -64,24 +46,33 @@
     <!-- Notifications Section -->
     <div class="section-group">
       <div class="section-title">通知</div>
-      <div class="notif-cards-list">
-        {#each notificationsList as notif (notif.id)}
-          <div class="notif-card">
-            <div class="notif-card-header">
-              <span class="notif-dot">{notif.dot}</span>
-              <span class="notif-card-title">{notif.title}</span>
+      {#if notificationsList.length === 0}
+        <div class="empty-notif-box">
+          <span class="empty-notif-text">目前無未讀通知或警報</span>
+        </div>
+      {:else}
+        <div class="notif-cards-list">
+          {#each notificationsList as notif (notif.id)}
+            <div class="notif-card">
+              <div class="notif-card-header">
+                <span class="notif-dot">{notif.dot}</span>
+                <span class="notif-card-title">{notif.title}</span>
+              </div>
+              <p class="notif-card-desc">
+                {notif.message}{notif.time ? ` · ${notif.time}` : ''}
+              </p>
             </div>
-            <p class="notif-card-desc">
-              {notif.message}{notif.time ? ` · ${notif.time}` : ''}
-            </p>
-          </div>
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {/if}
     </div>
 
     <!-- Other Public Institutions Section -->
     <div class="section-group">
-      <div class="section-title">其他往來公家單位（客戶快搜可查到）</div>
+      <div class="section-header-row">
+        <span class="section-title">其他往來公家單位（客戶快搜可查到）</span>
+        <span class="badge-mock">情境示意</span>
+      </div>
       <p class="section-caption">
         下列客戶僅示意「不只一家往來單位」，未做滿三段角色流程（中山國小已有獨立的新任務示範，見上方「受理客戶採購需求」卡片）。
       </p>
@@ -190,10 +181,41 @@
     color: var(--text-secondary);
   }
 
+  .section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .badge-mock {
+    font-size: 0.68rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    font-weight: 500;
+  }
+
   .section-caption {
     font-size: 0.75rem;
     color: var(--text-muted);
     line-height: 1.45;
+  }
+
+  /* Empty Notification Box */
+  .empty-notif-box {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 16px 12px;
+    text-align: center;
+  }
+
+  .empty-notif-text {
+    font-size: 0.78rem;
+    color: var(--text-muted);
   }
 
   /* Notifications */

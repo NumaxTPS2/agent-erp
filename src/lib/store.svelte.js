@@ -22,6 +22,7 @@ export const appState = $state({
   loadedComponents: {}, // Map of moduleId -> Svelte Component class
 
   get activeWorkspace() {
+    if (this.route === '/app/agent') return 'agent';
     if (this.route === '/app/sales') return 'sales';
     if (this.route === '/app/finance') return 'finance';
     if (this.route === '/app/crm') return 'crm';
@@ -36,7 +37,8 @@ export const appState = $state({
 
   set activeWorkspace(ws) {
     let targetRoute = `/app/${ws}`;
-    if (ws === 'sales') targetRoute = '/app/sales';
+    if (ws === 'agent') targetRoute = '/app/agent';
+    else if (ws === 'sales') targetRoute = '/app/sales';
     else if (ws === 'finance') targetRoute = '/app/finance';
     else if (ws === 'crm') targetRoute = '/app/crm';
     else if (ws === 'settings') targetRoute = '/app/settings';

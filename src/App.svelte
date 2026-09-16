@@ -30,6 +30,8 @@
   import OnboardingScreen from './lib/components/auth/OnboardingScreen.svelte';
 
   let activeTab = $derived(appState.activeWorkspace);
+  let activeOrderFilter = $state('all');
+  let selectedOrderId = $state(null);
   let isNotificationOpen = $state(false);
   let isInitialized = $state(false);
 
@@ -162,6 +164,20 @@
       }
     };
   }
+
+  function handleOrderClick(order) {
+    selectedOrderId = order.so_id;
+    // Hydrate chat with order context
+    appState.chatMessages.push({
+      role: 'assistant',
+      content: `已為您載入 ${order.so_id} (${order.po_reference}) 的上下文資料：\n- 總價：$${order.total_amount.toLocaleString()}\n- 利潤率：${(order.profit_margin * 100).toFixed(0)}%\n- 產能消耗：${(order.capacity_usage * 100).toFixed(0)}%\n\n您可以點擊「核准接單」以觸發安全攔截審查，或向我詢問關於此訂單的排程試算。`
+    });
+  }
+
+  function triggerAcceptOrder(order) {
+    // Intercept action and show confirmation card
+    appState.pendingMutation = order;
+  }
 </script>
 
 {#if appState.route === '/login'}
@@ -183,6 +199,18 @@
           </button>
 
           <nav class="rail-nav">
+            <!-- AI Agent Chat / 主助理 -->
+            <button 
+              class="rail-nav-btn {activeTab === 'agent' ? 'active' : ''}" 
+              onclick={() => selectWorkspace('agent')}
+              title="AI 助理對話"
+              aria-label="AI 助理對話"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </button>
+
             <!-- Sales / Main icon -->
             <button 
               class="rail-nav-btn {activeTab === 'sales' ? 'active' : ''}" 
@@ -232,7 +260,9 @@
               <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
               <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
             </svg>
-            <span class="rail-badge">{appState.notifications.length > 0 ? appState.notifications.length : 1}</span>
+            {#if appState.notifications.length > 0}
+              <span class="rail-badge">{appState.notifications.length}</span>
+            {/if}
           </button>
         </div>
       </aside>
@@ -411,7 +441,126 @@
                 </div>
               </div>
             </div>
-          {:else if activeTab !== 'sales' && appState.installedModules.some(m => m.id === activeTab)}
+          {:else if activeTab === 'sales' && !appState.activeTaskId}
+            <!-- Sales & Orders Workspace View -->
+            <div class="workspace-scrollable">
+              <div class="orders-layout">
+                <div class="orders-sidebar">
+                  <div class="filter-row">
+                    <button class="filter-btn {activeOrderFilter === 'all' ? 'active' : ''}" onclick={() => activeOrderFilter = 'all'}>全部</button>
+                    <button class="filter-btn {activeOrderFilter === 'pending' ? 'active' : ''}" onclick={() => activeOrderFilter = 'pending'}>待處理</button>
+                    <button class="filter-btn {activeOrderFilter === 'approved' ? 'active' : ''}" onclick={() => activeOrderFilter = 'approved'}>已核准</button>
+                  </div>
+
+                  <div class="orders-list">
+                    {#if appState.mirroredOrders.length === 0}
+                      <div class="empty-orders-msg">目前暫無訂單資料</div>
+                    {:else}
+                      {#each appState.mirroredOrders.filter(o => activeOrderFilter === 'all' || o.status === activeOrderFilter) as order}
+                        <button 
+                          type="button"
+                          class="order-card {selectedOrderId === order.so_id ? 'selected' : ''}" 
+                          onclick={() => handleOrderClick(order)}
+                        >
+                          <div class="order-card-header">
+                            <span class="order-id font-bold">{order.so_id}</span>
+                            <span class="badge {order.status === 'approved' ? 'badge-emerald' : 'badge-amber'}">{order.status === 'approved' ? '已核准' : '待審核'}</span>
+                          </div>
+                          <div class="order-client">{order.customer_name}</div>
+                          <div class="order-amount">${order.total_amount.toLocaleString()}</div>
+                        </button>
+                      {/each}
+                    {/if}
+                  </div>
+                </div>
+
+                <div class="order-detail glass-panel">
+                  {#if selectedOrderId}
+                    {@const order = appState.mirroredOrders.find(o => o.so_id === selectedOrderId)}
+                    {#if order}
+                      <div class="detail-header">
+                        <h2>銷售訂單草稿：{order.so_id}</h2>
+                        <span class="badge {order.status === 'approved' ? 'badge-emerald' : 'badge-amber'}">{order.status === 'approved' ? '已核准放行' : '等候 ' + (appState.authUser?.display_name || appState.authUser?.email || '操作者') + ' 安全確認'}</span>
+                      </div>
+                      
+                      <div class="detail-grid">
+                        <div class="detail-block">
+                          <span class="block-label">客戶採購單參考 (PO Ref):</span>
+                          <span class="block-val">{order.po_reference}</span>
+                        </div>
+                        <div class="detail-block">
+                          <span class="block-label">客戶名稱:</span>
+                          <span class="block-val">{order.customer_name}</span>
+                        </div>
+                        <div class="detail-block">
+                          <span class="block-label">下單時間:</span>
+                          <span class="block-val">{new Date(order.created_at * 1000).toLocaleString()}</span>
+                        </div>
+                        <div class="detail-block">
+                          <span class="block-label">訂單利潤預估:</span>
+                          <span class="block-val text-emerald font-bold">{(order.profit_margin * 100).toFixed(0)}%</span>
+                        </div>
+                      </div>
+
+                      <div class="items-table-container">
+                        <h4>訂單明細</h4>
+                        <table class="items-table">
+                          <thead>
+                            <tr>
+                              <th>商品名稱</th>
+                              <th>數量</th>
+                              <th>單價</th>
+                              <th>總價</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {#each order.items as item}
+                              <tr>
+                                <td>{item.name}</td>
+                                <td>{item.qty}</td>
+                                <td>${item.price}</td>
+                                <td>${(item.qty * item.price).toLocaleString()}</td>
+                              </tr>
+                            {/each}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <!-- Interceptor Action row -->
+                      {#if order.status === 'pending'}
+                        <div class="ai-copilot-card">
+                          <div class="ai-header">
+                            <span class="pulse-icon"></span>
+                            <h4>AI Agent 預審結果</h4>
+                          </div>
+                          <p>
+                            該採購單利潤率為 25%，消耗邊緣工廠 85% 產能。系統已成功排程生產，剩餘 15% 產能可用於彈性接單。建議 {appState.authUser?.display_name || appState.authUser?.email || '您'} 核准此寫入動作以同步庫存帳本。
+                          </p>
+                          <button class="btn btn-primary" onclick={() => triggerAcceptOrder(order)}>
+                            核准接單並釋放指令
+                          </button>
+                        </div>
+                      {:else}
+                        <div class="approved-success-box">
+                          <span class="check-icon">✓</span>
+                          <div>
+                            <h4>訂單已於本地 SQLite 資料庫放行</h4>
+                            <p>審計紀錄與加密收據已歸檔，該安全攔截動作已圓滿完成。</p>
+                          </div>
+                        </div>
+                      {/if}
+                    {/if}
+                  {:else}
+                    <div class="detail-placeholder">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                      <h3>請從左側列表選擇訂單查看詳情</h3>
+                      <p>或點擊右上角「模擬 PO Webhook」生成新的訂單鏡像。</p>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {:else if activeTab !== 'sales' && activeTab !== 'agent' && appState.installedModules.some(m => m.id === activeTab)}
             <!-- Dynamic Pluggable Modules Panels -->
             {@const mod = appState.installedModules.find(m => m.id === activeTab)}
             {@const Component = mod ? appState.loadedComponents[mod.id] : null}
@@ -505,6 +654,228 @@
     height: 20px;
     stroke: currentColor;
     fill: none;
+  }
+
+  /* Orders Workspace Layout */
+  .orders-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 20px;
+    min-height: 520px;
+    height: 100%;
+  }
+
+  .orders-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .filter-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .filter-btn {
+    flex-grow: 1;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  .filter-btn.active {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-active);
+  }
+
+  .orders-list {
+    flex-grow: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .empty-orders-msg {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.88rem;
+  }
+
+  .order-card {
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+
+  .order-card:hover {
+    border-color: var(--border-active);
+  }
+
+  .order-card.selected {
+    border-color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.03);
+  }
+
+  .order-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .order-client {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 4px;
+  }
+
+  .order-amount {
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+
+  .order-detail {
+    flex-grow: 1;
+    padding: 24px;
+    overflow-y: auto;
+  }
+
+  .detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 20px;
+  }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .detail-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .block-label {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+  }
+
+  .block-val {
+    font-size: 1.05rem;
+    color: var(--text-primary);
+  }
+
+  .items-table-container {
+    margin-bottom: 24px;
+  }
+
+  .items-table-container h4 {
+    margin-bottom: 10px;
+  }
+
+  .items-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+  }
+
+  .items-table th, .items-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .items-table th {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .ai-copilot-card {
+    background: rgba(var(--accent-amber), 0.05);
+    border: 1px solid rgba(var(--accent-amber), 0.25);
+    border-radius: var(--radius-sm);
+    padding: 18px;
+    margin-top: 10px;
+  }
+
+  .ai-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgb(var(--accent-amber));
+    margin-bottom: 10px;
+  }
+
+  .ai-header h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .ai-copilot-card p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+
+  .approved-success-box {
+    display: flex;
+    gap: 16px;
+    background: rgba(var(--accent-emerald), 0.05);
+    border: 1px solid rgba(var(--accent-emerald), 0.25);
+    border-radius: var(--radius-sm);
+    padding: 18px;
+    margin-top: 10px;
+    align-items: center;
+  }
+
+  .check-icon {
+    font-size: 2.2rem;
+    color: rgb(var(--accent-emerald));
+    font-weight: 300;
+  }
+
+  .approved-success-box h4 {
+    color: rgb(var(--accent-emerald));
+  }
+
+  .approved-success-box p {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 2px;
+  }
+
+  .detail-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    gap: 12px;
   }
 
   /* Settings Page */

@@ -6,6 +6,7 @@
   );
 
   let workspaceLabel = $derived.by(() => {
+    if (appState.activeWorkspace === 'agent') return 'AI 助理對話';
     if (appState.activeWorkspace === 'sales') return '銷售與訂單';
     if (appState.activeWorkspace === 'settings') return '系統與市集管理';
     if (appState.activeWorkspace === 'finance') return '財務管理';

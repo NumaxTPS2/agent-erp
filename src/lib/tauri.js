@@ -32,11 +32,7 @@ let mockUserTenants = [
   { user_id: "usr_mock_admin", tenant_id: "tnt_mock_1", role: "admin" },
   { user_id: "usr_mock_admin", tenant_id: "tnt_mock_2", role: "member" }
 ];
-let mockSessions = loadStorage('agent_erp_mock_session', {
-  token: "mock-token-admin",
-  user_id: "usr_mock_admin",
-  active_tenant_id: "tnt_mock_1"
-});
+let mockSessions = loadStorage('agent_erp_mock_session', null);
 
 function loadStorage(key, defaultVal) {
   if (typeof window !== 'undefined' && window.localStorage) {
@@ -50,7 +46,13 @@ function loadStorage(key, defaultVal) {
 
 function saveStorage(key, val) {
   if (typeof window !== 'undefined' && window.localStorage) {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+    try {
+      if (val === null || val === undefined) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, JSON.stringify(val));
+      }
+    } catch (e) {}
   }
 }
 
@@ -430,6 +432,7 @@ export async function invoke(cmd, args = {}) {
       }
       if (method === 'POST' && path === '/v1/auth/logout') {
         mockSessions = null;
+        saveStorage('agent_erp_mock_session', null);
         return {};
       }
       if (method === 'POST' && path === '/v1/test/expire') {
@@ -440,6 +443,7 @@ export async function invoke(cmd, args = {}) {
     
     case 'logout': {
       mockSessions = null;
+      saveStorage('agent_erp_mock_session', null);
       return null;
     }
 
