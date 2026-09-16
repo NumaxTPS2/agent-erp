@@ -15,6 +15,7 @@
   let tenantName = $state('');
   let companyName = $state('');
   let tenantCode = $state('');
+  let taxId = $state('');
 
   // UI state
   let isLoading = $state(false);
@@ -78,7 +79,7 @@
     errorMessage = '';
 
     try {
-      await registerTenant(adminName.trim(), tenantName, companyName, adminEmail, adminPassword, tenantCode);
+      await registerTenant(adminName.trim(), tenantName, companyName, adminEmail, adminPassword, tenantCode, taxId);
       if (appState.authStatus === 'authenticated') {
         navigate('/app/agent');
       } else if (appState.authStatus === 'needs_tenant_creation') {
@@ -208,42 +209,53 @@
         <!-- STEP 2: COMPANY/TENANT DETAILS -->
         <div class="step-panel">
           <div class="form-group">
-            <label for="tenantName">集團租戶名稱 (Tenant Group Name)</label>
-            <input 
-              type="text" 
-              id="tenantName" 
-              bind:value={tenantName}
-              placeholder="e.g. 努瑪斯科技集團"
-              disabled={isLoading}
-              required
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="companyName">公司法定名稱 (Company Legal Name)</label>
-            <input 
-              type="text" 
-              id="companyName" 
-              bind:value={companyName}
-              placeholder="e.g. 努瑪斯股份有限公司"
-              disabled={isLoading}
-              required
-            />
-          </div>
-
-          <div class="form-group">
-            <label for="tenantCode">租戶代碼 (Tenant Code / Slug)</label>
+            <label for="tenantCode">集團代碼 (Group Code) <span class="required">*</span></label>
             <input 
               type="text" 
               id="tenantCode" 
               bind:value={tenantCode}
-              placeholder="e.g. numax-tech (限小寫英文、數字與底線/減號)"
+              placeholder="例如: numax-group (限小寫英文、數字與 - _)"
               disabled={isLoading}
               required
             />
             {#if tenantCode && !/^[a-z0-9-_]+$/.test(tenantCode)}
               <span class="field-error">代碼格式不正確，僅限小寫英文、數字與 - _</span>
             {/if}
+          </div>
+
+          <div class="form-group">
+            <label for="tenantName">集團名稱 (Group Name) <span class="required">*</span></label>
+            <input 
+              type="text" 
+              id="tenantName" 
+              bind:value={tenantName}
+              placeholder="例如: 紐碼科技集團"
+              disabled={isLoading}
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="companyName">公司法定名稱 (Company Legal Name) <span class="required">*</span></label>
+            <input 
+              type="text" 
+              id="companyName" 
+              bind:value={companyName}
+              placeholder="例如: 紐碼科技股份有限公司"
+              disabled={isLoading}
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="taxId">統一編號 (Tax ID) <span class="optional">(選填)</span></label>
+            <input 
+              type="text" 
+              id="taxId" 
+              bind:value={taxId}
+              placeholder="例如: 12345678"
+              disabled={isLoading}
+            />
           </div>
 
           <div class="button-row">

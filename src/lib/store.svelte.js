@@ -514,6 +514,7 @@ export async function seedOnboardingTasks(tenantName) {
     const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
     // Seed initial child task guidance message
     await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
+    await fetchTasks('sales');
   } catch (e) {
     console.warn("Failed to create onboarding tasks on tenant creation:", e);
   }
@@ -526,16 +527,18 @@ export async function seedOnboardingTasks(tenantName) {
  * @param {string} adminEmail
  * @param {string} adminPassword
  * @param {string} tenantCode
+ * @param {string} [taxId]
  * @returns {Promise<any>}
  */
-export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode) {
+export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode, taxId) {
   const res = await apiCall('POST', '/v1/auth/register-tenant', {
     admin_name: adminName,
     tenant_name: tenantName,
     company_name: companyName,
     admin_email: adminEmail,
     admin_password: adminPassword,
-    tenant_code: tenantCode
+    tenant_code: tenantCode,
+    tax_id: taxId || undefined
   });
   await checkAuthStatus();
   await seedOnboardingTasks(tenantName);

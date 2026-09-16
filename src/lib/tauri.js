@@ -354,9 +354,9 @@ export async function invoke(cmd, args = {}) {
         };
       }
       if (method === 'POST' && path === '/v1/auth/register-tenant') {
-        const { admin_name, tenant_name, company_name, admin_email, admin_password, tenant_code } = body;
+        const { admin_name, tenant_name, company_name, admin_email, admin_password, tenant_code, tax_id } = body;
         if (!admin_name || !admin_name.trim()) {
-          throw { code: "IAM_ERR_INVALID_ARGUMENT", message: "invalid argument: admin_name cannot be empty" };
+          throw { code: "IAM_ERR_INVALID_ARGUMENT", message: "admin_name cannot be empty" };
         }
         if (admin_password.length < 8) {
           throw { code: "IAM_ERR_WEAK_PASSWORD", message: "weak password" };
@@ -367,7 +367,7 @@ export async function invoke(cmd, args = {}) {
         const user_id = `usr_${Date.now()}`;
         const tenant_id = `tnt_${Date.now()}`;
         mockUsers.push({ id: user_id, email: admin_email, password: admin_password, name: admin_name.trim() });
-        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name });
+        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name, tax_id: tax_id || null });
         mockUserTenants.push({ user_id, tenant_id, role: "admin" });
         mockSessions = {
           token: `mock-token-${user_id}`,
@@ -375,6 +375,13 @@ export async function invoke(cmd, args = {}) {
           active_tenant_id: tenant_id
         };
         saveStorage('agent_erp_mock_session', mockSessions);
+
+        // Reset any stale mock tasks for clean onboarding experience
+        mockTasks = [];
+        saveStorage('agent_erp_mock_tasks', mockTasks);
+        mockTaskMessages = [];
+        saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
+
         return {
           user: { id: user_id, email: admin_email, display_name: admin_name.trim() },
           tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
@@ -419,6 +426,12 @@ export async function invoke(cmd, args = {}) {
         // Generate new mock scoped token
         const new_token = `mock-scoped-token-${mockSessions.user_id}`;
         mockSessions.token = new_token;
+
+        // Reset any stale mock tasks for clean onboarding experience
+        mockTasks = [];
+        saveStorage('agent_erp_mock_tasks', mockTasks);
+        mockTaskMessages = [];
+        saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
 
         const user = mockUsers.find(u => u.id === mockSessions.user_id);
         return {
