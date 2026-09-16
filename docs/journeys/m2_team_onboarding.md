@@ -24,6 +24,7 @@
 | 2（並行） | #70 / #33 | 子 Agent 協助新增部門 / 邀請成員 |
 | 3 | #34 | 子 Agent 協助指派角色（Owner/Admin/Member） |
 | 支撐 3 | #35 | 前端依角色顯示/隱藏功能 |
+| 貫穿全程 | #76 | 任務面板／breadcrumb／現況總覽視覺設計，讓步驟 1 的任務卡片與進度有畫面可以呈現 |
 | 貫穿全程 | #71 | 上述步驟從 mock 換成真實 TPS2 串接 |
 
 ## 5. 驗收（DoD）
@@ -33,11 +34,23 @@
 ### Layer 2（瀏覽器 mock，`npm run dev`）
 
 ```gherkin
+Scenario: 新租戶建立後必須落地在 AI 助理對話工作區
+  Given 使用者完成 create-tenant/register-tenant 流程
+  When 系統導覽到主畫面
+  Then 落地的 workspace 必須是 AI 助理對話，不是銷售與訂單或其他 workspace
+  And 這是後續所有 Scenario 的前提——如果這條不成立，主 Agent 開場白、任務卡片都不會被使用者看到（此前這條隱性前提沒有被明確斷言過，實際上壞過一段時間才在 #79/#80 修好，之後任何改動落地路由的 PR 都要對這條負責）
+
 Scenario: 新租戶第一次進入主畫面
   Given 一個剛建立、0 部門、只有自己 1 個成員的全新租戶
   When 使用者完成 create-tenant 流程進入主畫面
   Then 主 Agent 開場白報告「3 筆待處理任務」，不是固定招呼詞
   And context-panel 渲染出「設定部門」「邀請成員」「指派角色」三張任務卡片
+
+Scenario: 任何任務第一次被點進去都要有子 Agent 開場白，不能是空白對話
+  Given 一個任務（不論父任務或子任務）剛被建立、還沒有任何訊息
+  When 使用者第一次點擊該任務卡片，進入其專屬子 Agent 對話
+  Then 畫面必須立即顯示子 Agent 的開場白訊息，不能是空白畫面
+  And 這條規則對父任務跟子任務一致適用，不能只有特定任務類型有開場白
 
 Scenario: 完成一個子任務並回報主 Agent
   Given 使用者點擊「設定部門」任務卡片，進入該子任務的子 Agent 對話
@@ -79,6 +92,12 @@ Scenario: 角色指派錯誤需要收回，屬於危險操作需要明確確認
   When 使用者在「指派角色」子任務對話中要求收回這個角色
   Then 子 Agent 必須先呈現操作摘要（對象、原角色、新角色）要求使用者明確確認，不能直接執行
   And 這條確認機制不需要等 #21 完整泛化 Mutation Interceptor 才能做，但要記錄在案，之後 #21 泛化時這裡要改成共用同一套機制
+
+Scenario: Breadcrumb 不能顯示使用者未進入的任務路徑
+  Given 使用者目前沒有點進任何任務（沒有 activeTask）
+  When 使用者切換到任一個 workspace，不論此時是否存在 in_progress 的任務
+  Then breadcrumb 只顯示目前 workspace 名稱，不能出現任何任務標題
+  And 只有使用者實際點進某個任務後，breadcrumb 才能顯示「workspace / 任務標題」（這條曾經壞過一次，見 #79，之後任何動到 breadcrumb 邏輯的 PR 都要對這條負責，避免同類問題悄悄回歸）
 ```
 
 ### Layer 3（`tauri dev`，真實視窗，需要人工動手跑）
