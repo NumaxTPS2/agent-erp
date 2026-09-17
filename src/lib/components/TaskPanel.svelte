@@ -1,7 +1,7 @@
 <script>
-  import { appState, switchActiveTask } from '../store.svelte.js';
+  import { appState, switchActiveTask, setTaskPanelCollapsed } from '../store.svelte.js';
 
-  let isCollapsed = $derived(appState.isTaskPanelCollapsed);
+  let isCollapsed = $derived(appState.taskPanelCollapsed);
 
   let pendingCount = $derived(
     appState.tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length
@@ -70,7 +70,7 @@
 
       <button 
         class="collapse-btn" 
-        onclick={() => appState.isTaskPanelCollapsed = true}
+        onclick={() => setTaskPanelCollapsed(true)}
         title="收合任務面板" 
         aria-label="收合任務面板"
       >
@@ -169,7 +169,7 @@
     <div class="collapsed-strip">
       <button 
         class="expand-btn" 
-        onclick={() => appState.isTaskPanelCollapsed = false}
+        onclick={() => setTaskPanelCollapsed(false)}
         title="展開任務面板" 
         aria-label="展開任務面板"
       >
@@ -179,7 +179,7 @@
         </svg>
       </button>
 
-      <div class="collapsed-icon-wrap" onclick={() => isCollapsed = false} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (isCollapsed = false)}>
+      <div class="collapsed-icon-wrap" onclick={() => setTaskPanelCollapsed(false)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && setTaskPanelCollapsed(false)}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M9 11l3 3L22 4"></path>
           <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>

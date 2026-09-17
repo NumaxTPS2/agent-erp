@@ -1,5 +1,5 @@
 <script>
-  import { appState } from '../store.svelte.js';
+  import { appState, setTaskPanelCollapsed } from '../store.svelte.js';
 
   let pendingTasksCount = $derived(
     appState.tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length
@@ -27,7 +27,9 @@
   let isInstitutionsCollapsed = $state(true);
 
   function handleTaskStatClick() {
-    appState.isTaskPanelCollapsed = false;
+    if (appState.taskPanelCollapsed) {
+      setTaskPanelCollapsed(false);
+    }
   }
 </script>
 

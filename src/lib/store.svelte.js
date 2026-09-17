@@ -11,6 +11,20 @@
 import { invoke, check, relaunch } from './tauri.js';
 import { loadModule } from './registry.js';
 
+function loadTaskPanelCollapsed() {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = localStorage.getItem('agent_erp_task_panel_collapsed');
+      if (saved !== null) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn("Failed to load taskPanelCollapsed from localStorage:", e);
+    }
+  }
+  return false;
+}
+
 // Define the global reactive app state using Svelte 5 $state
 export const appState = $state({
   route: '/app/agent',
@@ -62,7 +76,7 @@ export const appState = $state({
   tasks: [],
   /** @type {string | null} */
   activeTaskId: null, // null = 主 Agent 環境對話；字串 = 子任務對話
-  isTaskPanelCollapsed: false,
+  taskPanelCollapsed: loadTaskPanelCollapsed(),
   /** @type {Record<string, Array<{ role: string, content: string, timestamp?: number }>>} */
   taskMessages: {},
 
@@ -668,6 +682,21 @@ export async function switchActiveTask(taskId) {
     }
   } catch (err) {
     console.error(`Failed to fetch messages for ${targetKey}:`, err);
+  }
+}
+
+/**
+ * Set and persist task panel collapsed state
+ * @param {boolean} collapsed
+ */
+export function setTaskPanelCollapsed(collapsed) {
+  appState.taskPanelCollapsed = Boolean(collapsed);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem('agent_erp_task_panel_collapsed', JSON.stringify(appState.taskPanelCollapsed));
+    } catch (e) {
+      console.warn("Failed to save taskPanelCollapsed to localStorage:", e);
+    }
   }
 }
 
