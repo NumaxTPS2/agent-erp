@@ -512,9 +512,6 @@ export async function login(email, password) {
 export async function seedOnboardingTasks(tenantName) {
   try {
     const parentTask = await createTaskAction('新租戶起步', 'sales', '主管', null);
-    // Seed initial parent task guidance message
-    await appendTaskMessageAction(parentTask.id, 'assistant', `您好！我是「新租戶起步」協同助理。在建立新租戶「${tenantName}」後，我將協助您依序完成組織部門設定、團隊成員邀請與角色權限配置。您可以點擊下方的子任務開始，或直接向我詢問。`);
-
     const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
     // Seed initial child task guidance message
     await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
@@ -642,8 +639,28 @@ export async function switchActiveTask(taskId) {
   appState.activeTaskId = taskId;
   const targetKey = taskId || 'main';
   try {
-    const msgs = await invoke('get_task_messages', { taskId: targetKey });
-    appState.taskMessages[targetKey] = msgs || [];
+    let msgs = await invoke('get_task_messages', { taskId: targetKey });
+    msgs = msgs || [];
+
+    // 通用開場白機制：若 taskId 存在且訊息數為 0，動態產生並儲存一次性開場白快照
+    if (taskId && msgs.length === 0) {
+      const task = appState.tasks.find(t => t.id === taskId);
+      if (task) {
+        const subTasks = appState.tasks.filter(t => t.parent_task_id === task.id);
+        const total = subTasks.length;
+        let greeting = '';
+        if (total > 0) {
+          const done = subTasks.filter(t => t.status === 'done').length;
+          greeting = `您好，我是「${task.title}」的協助人員。目前進度：${done}/${total} 個子任務已完成。`;
+        } else {
+          greeting = `您好，我是「${task.title}」的協助人員，請問需要什麼協助？`;
+        }
+        await appendTaskMessageAction(taskId, 'assistant', greeting);
+        msgs = appState.taskMessages[targetKey] || [];
+      }
+    }
+
+    appState.taskMessages[targetKey] = msgs;
     if (!taskId) {
       if (msgs && msgs.length > 0) {
         appState.chatMessages = msgs;
@@ -673,7 +690,7 @@ export async function appendTaskMessageAction(taskId, role, content) {
       timestamp: Math.floor(Date.now() / 1000)
     });
     if (targetKey === 'main' || !appState.activeTaskId) {
-      appState.chatMessages = [...appState.taskMessages['main']];
+      appState.chatMessages = [...(appState.taskMessages['main'] || [])];
     }
   } catch (err) {
     console.error("Failed to append task message:", err);

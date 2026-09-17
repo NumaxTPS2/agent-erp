@@ -88,13 +88,6 @@ const defaultMockTaskMessages = [
     timestamp: Math.floor(Date.now() / 1000) - 3600
   },
   {
-    id: "msg_parent_1",
-    task_id: "task_parent_1",
-    role: "assistant",
-    content: "您好！我是「新租戶起步」協同助理。在建立新租戶後，我將協助您依序完成組織部門設定、團隊成員邀請與角色權限配置。您可以點擊下方的子任務開始，或直接向我詢問。",
-    timestamp: Math.floor(Date.now() / 1000) - 3600
-  },
-  {
     id: "msg_sub_1",
     task_id: "task_sub_1",
     role: "assistant",
