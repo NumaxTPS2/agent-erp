@@ -687,6 +687,7 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
                 .ok_or_else(|| {
                     ApiError::InvalidArgument("Missing tenant_code parameter".to_string())
                 })?;
+            let tax_id = body.get("tax_id").and_then(|v| v.as_str());
 
             if admin_name.trim().is_empty() {
                 return Err(ApiError::InvalidArgument(
@@ -720,8 +721,8 @@ async fn mock_dispatch<R: tauri::Runtime, S: TokenStore>(
 
             // Save tenant
             conn.execute(
-                "INSERT INTO tenants (id, code, name, company_name) VALUES (?1, ?2, ?3, ?4)",
-                (&tenant_id, tenant_code, tenant_name, company_name),
+                "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+                (&tenant_id, tenant_code, tenant_name, company_name, tax_id),
             )
             .map_err(|e| ApiError::DatabaseError(format!("Failed to create tenant: {}", e)))?;
 
@@ -1489,6 +1490,46 @@ mod tests {
         assert!(res_val.get("access_token").is_none());
         assert!(res_val.get("refresh_token").is_none());
         assert!(token_store.load().unwrap().is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_register_tenant_with_tax_id_success() {
+        // Given: setup fresh test database and in-memory token store with optional tax_id
+        let handle = setup_test_db();
+        let token_store = InMemoryTokenStore::new();
+
+        let req_body = json!({
+            "admin_name": "Alice Wang",
+            "tenant_name": "Numax Group",
+            "company_name": "Numax Corp",
+            "admin_email": "alice@numax.com",
+            "admin_password": "secure_password_123",
+            "tenant_code": "numax_corp",
+            "tax_id": "88888888"
+        });
+
+        // When: registering new tenant with tax_id
+        let res = execute_api_call(
+            &handle,
+            &token_store,
+            "POST",
+            "/v1/auth/register-tenant",
+            &req_body,
+        )
+        .await;
+
+        // Then: registration succeeds and tax_id is saved in database
+        assert!(res.is_ok());
+        let db_path = crate::get_db_path(&handle);
+        let conn = rusqlite::Connection::open(db_path).unwrap();
+        let saved_tax_id: Option<String> = conn
+            .query_row(
+                "SELECT tax_id FROM tenants WHERE code = 'numax_corp'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved_tax_id, Some("88888888".to_string()));
     }
 
     #[tokio::test(flavor = "current_thread")]

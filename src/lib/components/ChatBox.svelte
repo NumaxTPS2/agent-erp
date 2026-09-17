@@ -158,6 +158,24 @@
       </div>
     {/if}
 
+    <!-- If no messages in task conversation, render task intro greeting -->
+    {#if appState.activeTaskId && currentMessages.length === 0}
+      <div class="message-row assistant">
+        <div class="message-bubble assistant">
+          <div class="message-meta">{activeTask ? activeTask.title : '任務'} 協同助理</div>
+          <div class="message-body">
+            {#if activeTask && !activeTask.parent_task_id}
+              您好！我是「{activeTask.title}」協同助理。在建立新租戶後，我將協助您依序完成組織部門設定、團隊成員邀請與角色權限配置。您可以點擊左側面板的子任務開始處理，或直接向我詢問。
+            {:else if activeTask}
+              您好！我是「{activeTask.title}」專屬子任務助理。我已載入此子任務上下文。您可以直接在下方輸入指令，或點擊快速操作來執行此任務。
+            {:else}
+              您好！我已載入此任務上下文，隨時可以為您服務。
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- Subtask View: Interactive Quick Action Button for Department Setup -->
     {#if appState.activeTaskId && activeTask && activeTask.title.includes('設定部門') && activeTask.status !== 'done'}
       <div class="subtask-quick-action glass-panel">

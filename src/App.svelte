@@ -17,7 +17,8 @@
     logoutAction,
     simulateTokenExpiry,
     fetchTasks,
-    initMainChatGreeting
+    initMainChatGreeting,
+    switchActiveTask
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import TaskPanel from './lib/components/TaskPanel.svelte';
@@ -41,7 +42,7 @@
     await fetchAuditLogs();
     await fetchInstalledModules();
     await fetchModulesGallery();
-    await fetchTasks(appState.activeWorkspace || 'sales');
+    await fetchTasks();
     await initMainChatGreeting();
     isInitialized = true;
   }
@@ -73,7 +74,7 @@
     } else {
       // Authenticated
       if (appState.route === '/login' || appState.route === '/register') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       }
       await initializeAppData();
     }
@@ -83,7 +84,7 @@
       const hash = location.hash.slice(1);
       if (!hash) {
         if (appState.authStatus === 'authenticated') {
-          navigate('/app/sales');
+          navigate('/app/agent');
         } else {
           navigate('/login');
         }
@@ -141,11 +142,17 @@
   });
 
   function selectWorkspace(ws) {
-    if (ws === 'sales') navigate('/app/sales');
+    if (ws === 'agent') navigate('/app/agent');
+    else if (ws === 'sales') navigate('/app/sales');
     else if (ws === 'finance') navigate('/app/finance');
     else if (ws === 'crm') navigate('/app/crm');
     else if (ws === 'settings') navigate('/app/settings');
     else navigate(`/app/${ws}`);
+  }
+
+  function handleBrandLogoClick() {
+    switchActiveTask(null);
+    selectWorkspace('agent');
   }
 
   // Svelte Action to safely mount dynamic vanilla components to a physical DIV node
@@ -194,7 +201,7 @@
       <!-- 1. Left Sidebar Rail (64px) -->
       <aside class="sidebar-rail">
         <div class="rail-top">
-          <button class="rail-brand-logo" onclick={() => selectWorkspace('sales')} title="AgentERP Edge">
+          <button class="rail-brand-logo" onclick={handleBrandLogoClick} title="回到主 Agent 環境對話">
             A
           </button>
 

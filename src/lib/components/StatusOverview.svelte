@@ -1,5 +1,5 @@
 <script>
-  import { appState } from '../store.svelte.js';
+  import { appState, setTaskPanelCollapsed } from '../store.svelte.js';
 
   let pendingTasksCount = $derived(
     appState.tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length
@@ -23,6 +23,12 @@
     }
     return [];
   });
+
+  function handleTaskStatClick() {
+    if (appState.taskPanelCollapsed) {
+      setTaskPanelCollapsed(false);
+    }
+  }
 </script>
 
 <aside class="overview-sidebar-container">
@@ -33,10 +39,16 @@
   <div class="overview-scroll">
     <!-- Top Stat Tiles -->
     <div class="stat-tiles-row">
-      <div class="stat-tile">
+      <button 
+        type="button" 
+        class="stat-tile clickable-tile" 
+        onclick={handleTaskStatClick}
+        title="點擊展開左側任務面板"
+        aria-label="檢視待處理任務"
+      >
         <span class="stat-number amber">{pendingTasksCount}</span>
         <span class="stat-label">待處理任務</span>
-      </div>
+      </button>
       <div class="stat-tile">
         <span class="stat-number cyan">{unreadNotificationsCount}</span>
         <span class="stat-label">未讀通知</span>
@@ -65,25 +77,6 @@
           {/each}
         </div>
       {/if}
-    </div>
-
-    <!-- Other Public Institutions Section -->
-    <div class="section-group">
-      <div class="section-header-row">
-        <span class="section-title">其他往來公家單位（客戶快搜可查到）</span>
-        <span class="badge-mock">情境示意</span>
-      </div>
-      <p class="section-caption">
-        下列客戶僅示意「不只一家往來單位」，未做滿三段角色流程（中山國小已有獨立的新任務示範，見上方「受理客戶採購需求」卡片）。
-      </p>
-
-      <div class="client-card">
-        <div class="client-icon">🏛️</div>
-        <div class="client-info">
-          <span class="client-name">台北市政府</span>
-          <span class="client-type">共同供應契約客戶</span>
-        </div>
-      </div>
     </div>
   </div>
 </aside>
@@ -148,6 +141,20 @@
     border-color: rgba(255, 255, 255, 0.15);
   }
 
+  .stat-tile.clickable-tile {
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    outline: none;
+    font-family: inherit;
+    text-align: center;
+  }
+
+  .stat-tile.clickable-tile:hover {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.4);
+    transform: translateY(-1px);
+  }
+
   .stat-number {
     font-size: 1.75rem;
     font-weight: 700;
@@ -179,29 +186,6 @@
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-secondary);
-  }
-
-  .section-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .badge-mock {
-    font-size: 0.68rem;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
-    font-weight: 500;
-  }
-
-  .section-caption {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    line-height: 1.45;
   }
 
   /* Empty Notification Box */
@@ -263,38 +247,5 @@
     color: var(--text-secondary);
     line-height: 1.35;
     padding-left: 18px;
-  }
-
-  /* Client Card */
-  .client-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    padding: 10px 12px;
-  }
-
-  .client-icon {
-    font-size: 1.2rem;
-  }
-
-  .client-info {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-grow: 1;
-  }
-
-  .client-name {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .client-type {
-    font-size: 0.75rem;
-    color: var(--text-muted);
   }
 </style>

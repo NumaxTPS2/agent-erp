@@ -60,7 +60,7 @@
     try {
       await createTenantAction(tenantName, companyName, tenantCode, taxId);
       if (appState.authStatus === 'authenticated') {
-        navigate('/app/sales');
+        navigate('/app/agent');
       } else {
         errorMessage = '建立成功但狀態未同步，請重新登入';
       }
@@ -127,7 +127,7 @@
       </div>
 
       <div class="form-group">
-        <label for="companyName">第一家子公司名稱 (Company Name) <span class="required">*</span></label>
+        <label for="companyName">公司法定名稱 (Company Legal Name) <span class="required">*</span></label>
         <input 
           type="text" 
           id="companyName" 

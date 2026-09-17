@@ -19,21 +19,6 @@ let mockOrders = [
 let mockAuditLogs = [];
 let mockInstalledModules = [];
 
-// Local mock database for user authentication
-let mockUsers = [
-  { id: "usr_mock_admin", email: "admin@example.com", password: "password123", name: "Admin User" },
-  { id: "usr_mock_new", email: "new@example.com", password: "password123", name: "New User" }
-];
-let mockTenants = [
-  { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." },
-  { id: "tnt_mock_2", code: "alpha", name: "Alpha Corporation", company_name: "Alpha Corp." }
-];
-let mockUserTenants = [
-  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_1", role: "admin" },
-  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_2", role: "member" }
-];
-let mockSessions = loadStorage('agent_erp_mock_session', null);
-
 function loadStorage(key, defaultVal) {
   if (typeof window !== 'undefined' && window.localStorage) {
     const saved = localStorage.getItem(key);
@@ -55,6 +40,25 @@ function saveStorage(key, val) {
     } catch (e) {}
   }
 }
+
+// Local mock database for user authentication
+const defaultMockUsers = [
+  { id: "usr_mock_admin", email: "admin@example.com", password: "password123", name: "Admin User" },
+  { id: "usr_mock_new", email: "new@example.com", password: "password123", name: "New User" }
+];
+const defaultMockTenants = [
+  { id: "tnt_mock_1", code: "numax", name: "Numax Office", company_name: "Numax Inc." },
+  { id: "tnt_mock_2", code: "alpha", name: "Alpha Corporation", company_name: "Alpha Corp." }
+];
+const defaultMockUserTenants = [
+  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_1", role: "admin" },
+  { user_id: "usr_mock_admin", tenant_id: "tnt_mock_2", role: "member" }
+];
+
+let mockUsers = loadStorage('agent_erp_mock_users', defaultMockUsers);
+let mockTenants = loadStorage('agent_erp_mock_tenants', defaultMockTenants);
+let mockUserTenants = loadStorage('agent_erp_mock_user_tenants', defaultMockUserTenants);
+let mockSessions = loadStorage('agent_erp_mock_session', null);
 
 const defaultMockTasks = [
   {
@@ -354,9 +358,9 @@ export async function invoke(cmd, args = {}) {
         };
       }
       if (method === 'POST' && path === '/v1/auth/register-tenant') {
-        const { admin_name, tenant_name, company_name, admin_email, admin_password, tenant_code } = body;
+        const { admin_name, tenant_name, company_name, admin_email, admin_password, tenant_code, tax_id } = body;
         if (!admin_name || !admin_name.trim()) {
-          throw { code: "IAM_ERR_INVALID_ARGUMENT", message: "invalid argument: admin_name cannot be empty" };
+          throw { code: "IAM_ERR_INVALID_ARGUMENT", message: "admin_name cannot be empty" };
         }
         if (admin_password.length < 8) {
           throw { code: "IAM_ERR_WEAK_PASSWORD", message: "weak password" };
@@ -367,14 +371,27 @@ export async function invoke(cmd, args = {}) {
         const user_id = `usr_${Date.now()}`;
         const tenant_id = `tnt_${Date.now()}`;
         mockUsers.push({ id: user_id, email: admin_email, password: admin_password, name: admin_name.trim() });
-        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name });
+        saveStorage('agent_erp_mock_users', mockUsers);
+
+        mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name, tax_id: tax_id || null });
+        saveStorage('agent_erp_mock_tenants', mockTenants);
+
         mockUserTenants.push({ user_id, tenant_id, role: "admin" });
+        saveStorage('agent_erp_mock_user_tenants', mockUserTenants);
+
         mockSessions = {
           token: `mock-token-${user_id}`,
           user_id,
           active_tenant_id: tenant_id
         };
         saveStorage('agent_erp_mock_session', mockSessions);
+
+        // Reset any stale mock tasks for clean onboarding experience
+        mockTasks = [];
+        saveStorage('agent_erp_mock_tasks', mockTasks);
+        mockTaskMessages = [];
+        saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
+
         return {
           user: { id: user_id, email: admin_email, display_name: admin_name.trim() },
           tenants: [{ id: tenant_id, code: tenant_code, name: tenant_name, role: "admin" }]
@@ -413,12 +430,22 @@ export async function invoke(cmd, args = {}) {
         }
         const tenant_id = `tnt_${Date.now()}`;
         mockTenants.push({ id: tenant_id, code: tenant_code, name: tenant_name, company_name, tax_id });
+        saveStorage('agent_erp_mock_tenants', mockTenants);
+
         mockUserTenants.push({ user_id: mockSessions.user_id, tenant_id, role: "admin" });
+        saveStorage('agent_erp_mock_user_tenants', mockUserTenants);
+
         mockSessions.active_tenant_id = tenant_id;
 
         // Generate new mock scoped token
         const new_token = `mock-scoped-token-${mockSessions.user_id}`;
         mockSessions.token = new_token;
+
+        // Reset any stale mock tasks for clean onboarding experience
+        mockTasks = [];
+        saveStorage('agent_erp_mock_tasks', mockTasks);
+        mockTaskMessages = [];
+        saveStorage('agent_erp_mock_task_messages', mockTaskMessages);
 
         const user = mockUsers.find(u => u.id === mockSessions.user_id);
         return {

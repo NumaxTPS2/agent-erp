@@ -15,17 +15,9 @@
     return mod ? mod.name : '業務模組';
   });
 
-  let taskContextLabel = $derived.by(() => {
-    if (activeTask) {
-      return activeTask.title;
-    }
-    // Check if there's an in_progress parent task in the workspace
-    const inProgressParent = appState.tasks.find(t => !t.parent_task_id && t.status === 'in_progress');
-    if (inProgressParent) {
-      return inProgressParent.title;
-    }
-    return null;
-  });
+  let taskContextLabel = $derived(
+    activeTask ? activeTask.title : null
+  );
 </script>
 
 <div class="breadcrumb-container">

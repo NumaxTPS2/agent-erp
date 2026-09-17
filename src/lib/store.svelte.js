@@ -11,9 +11,23 @@
 import { invoke, check, relaunch } from './tauri.js';
 import { loadModule } from './registry.js';
 
+function loadTaskPanelCollapsed() {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = localStorage.getItem('agent_erp_task_panel_collapsed');
+      if (saved !== null) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn("Failed to load taskPanelCollapsed from localStorage:", e);
+    }
+  }
+  return false;
+}
+
 // Define the global reactive app state using Svelte 5 $state
 export const appState = $state({
-  route: '/app/sales',
+  route: '/app/agent',
   version: '0.1.0',
   isEnterpriseActive: false,
   /** @type {any[]} */
@@ -32,7 +46,7 @@ export const appState = $state({
     const match = this.route.match(/^\/app\/([^/]+)$/);
     if (match) return match[1];
     
-    return 'sales';
+    return 'agent';
   },
 
   set activeWorkspace(ws) {
@@ -62,6 +76,7 @@ export const appState = $state({
   tasks: [],
   /** @type {string | null} */
   activeTaskId: null, // null = 主 Agent 環境對話；字串 = 子任務對話
+  taskPanelCollapsed: loadTaskPanelCollapsed(),
   /** @type {Record<string, Array<{ role: string, content: string, timestamp?: number }>>} */
   taskMessages: {},
 
@@ -514,6 +529,7 @@ export async function seedOnboardingTasks(tenantName) {
     const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
     // Seed initial child task guidance message
     await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
+    await fetchTasks();
   } catch (e) {
     console.warn("Failed to create onboarding tasks on tenant creation:", e);
   }
@@ -526,16 +542,18 @@ export async function seedOnboardingTasks(tenantName) {
  * @param {string} adminEmail
  * @param {string} adminPassword
  * @param {string} tenantCode
+ * @param {string} [taxId]
  * @returns {Promise<any>}
  */
-export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode) {
+export async function registerTenant(adminName, tenantName, companyName, adminEmail, adminPassword, tenantCode, taxId) {
   const res = await apiCall('POST', '/v1/auth/register-tenant', {
     admin_name: adminName,
     tenant_name: tenantName,
     company_name: companyName,
     admin_email: adminEmail,
     admin_password: adminPassword,
-    tenant_code: tenantCode
+    tenant_code: tenantCode,
+    tax_id: taxId || undefined
   });
   await checkAuthStatus();
   await seedOnboardingTasks(tenantName);
@@ -589,12 +607,12 @@ export async function createTenantAction(tenantName, companyName, tenantCode, ta
 
 /**
  * Fetch tasks from SQLite
- * @param {string} [moduleId]
+ * @param {string | null} [moduleId]
  * @returns {Promise<any[]>}
  */
-export async function fetchTasks(moduleId = 'sales') {
+export async function fetchTasks(moduleId = null) {
   try {
-    const list = await invoke('list_tasks', { moduleId });
+    const list = await invoke('list_tasks', { moduleId: moduleId ? moduleId.trim() : '' });
     appState.tasks = list || [];
     return appState.tasks;
   } catch (err) {
@@ -619,7 +637,7 @@ export async function createTaskAction(title, moduleId, assignee, parentTaskId =
       assignee,
       parentTaskId: parentTaskId || null
     });
-    await fetchTasks(moduleId);
+    await fetchTasks();
     return task;
   } catch (err) {
     console.error("Failed to create task:", err);
@@ -635,8 +653,28 @@ export async function switchActiveTask(taskId) {
   appState.activeTaskId = taskId;
   const targetKey = taskId || 'main';
   try {
-    const msgs = await invoke('get_task_messages', { taskId: targetKey });
-    appState.taskMessages[targetKey] = msgs || [];
+    let msgs = await invoke('get_task_messages', { taskId: targetKey });
+    msgs = msgs || [];
+
+    // 通用開場白機制：若 taskId 存在且訊息數為 0，動態產生並儲存一次性開場白快照
+    if (taskId && msgs.length === 0) {
+      const task = appState.tasks.find(t => t.id === taskId);
+      if (task) {
+        const subTasks = appState.tasks.filter(t => t.parent_task_id === task.id);
+        const total = subTasks.length;
+        let greeting = '';
+        if (total > 0) {
+          const done = subTasks.filter(t => t.status === 'done').length;
+          greeting = `您好，我是「${task.title}」的協助人員。目前進度：${done}/${total} 個子任務已完成。`;
+        } else {
+          greeting = `您好，我是「${task.title}」的協助人員，請問需要什麼協助？`;
+        }
+        await appendTaskMessageAction(taskId, 'assistant', greeting);
+        msgs = appState.taskMessages[targetKey] || [];
+      }
+    }
+
+    appState.taskMessages[targetKey] = msgs;
     if (!taskId) {
       if (msgs && msgs.length > 0) {
         appState.chatMessages = msgs;
@@ -644,6 +682,21 @@ export async function switchActiveTask(taskId) {
     }
   } catch (err) {
     console.error(`Failed to fetch messages for ${targetKey}:`, err);
+  }
+}
+
+/**
+ * Set and persist task panel collapsed state
+ * @param {boolean} collapsed
+ */
+export function setTaskPanelCollapsed(collapsed) {
+  appState.taskPanelCollapsed = Boolean(collapsed);
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      localStorage.setItem('agent_erp_task_panel_collapsed', JSON.stringify(appState.taskPanelCollapsed));
+    } catch (e) {
+      console.warn("Failed to save taskPanelCollapsed to localStorage:", e);
+    }
   }
 }
 
@@ -666,7 +719,7 @@ export async function appendTaskMessageAction(taskId, role, content) {
       timestamp: Math.floor(Date.now() / 1000)
     });
     if (targetKey === 'main' || !appState.activeTaskId) {
-      appState.chatMessages = [...appState.taskMessages['main']];
+      appState.chatMessages = [...(appState.taskMessages['main'] || [])];
     }
   } catch (err) {
     console.error("Failed to append task message:", err);
@@ -681,7 +734,7 @@ export async function appendTaskMessageAction(taskId, role, content) {
 export async function updateTaskStatusAction(taskId, status) {
   try {
     await invoke('update_task_status', { taskId, status });
-    await fetchTasks(appState.activeWorkspace || 'sales');
+    await fetchTasks();
   } catch (err) {
     console.error("Failed to update task status:", err);
   }
@@ -710,7 +763,7 @@ export async function completeDepartmentSetupTask(taskId, departmentName = '銷�
  */
 export async function initMainChatGreeting() {
   try {
-    const tasks = await fetchTasks(appState.activeWorkspace || 'sales');
+    const tasks = await fetchTasks();
     const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
     
     const mainMsgs = await invoke('get_task_messages', { taskId: 'main' });
