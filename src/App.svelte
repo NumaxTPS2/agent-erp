@@ -41,7 +41,7 @@
     await fetchAuditLogs();
     await fetchInstalledModules();
     await fetchModulesGallery();
-    await fetchTasks(appState.activeWorkspace || 'sales');
+    await fetchTasks();
     await initMainChatGreeting();
     isInitialized = true;
   }
@@ -149,6 +149,11 @@
     else navigate(`/app/${ws}`);
   }
 
+  function handleBrandLogoClick() {
+    switchActiveTask(null);
+    selectWorkspace('agent');
+  }
+
   // Svelte Action to safely mount dynamic vanilla components to a physical DIV node
   function mountModule(node, moduleId) {
     const ComponentConstructor = appState.loadedComponents[moduleId];
@@ -195,7 +200,7 @@
       <!-- 1. Left Sidebar Rail (64px) -->
       <aside class="sidebar-rail">
         <div class="rail-top">
-          <button class="rail-brand-logo" onclick={() => selectWorkspace('agent')} title="AgentERP Edge">
+          <button class="rail-brand-logo" onclick={handleBrandLogoClick} title="回到主 Agent 環境對話">
             A
           </button>
 

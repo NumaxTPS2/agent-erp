@@ -62,6 +62,7 @@ export const appState = $state({
   tasks: [],
   /** @type {string | null} */
   activeTaskId: null, // null = 主 Agent 環境對話；字串 = 子任務對話
+  isTaskPanelCollapsed: false,
   /** @type {Record<string, Array<{ role: string, content: string, timestamp?: number }>>} */
   taskMessages: {},
 
@@ -511,10 +512,13 @@ export async function login(email, password) {
 export async function seedOnboardingTasks(tenantName) {
   try {
     const parentTask = await createTaskAction('新租戶起步', 'sales', '主管', null);
+    // Seed initial parent task guidance message
+    await appendTaskMessageAction(parentTask.id, 'assistant', `您好！我是「新租戶起步」協同助理。在建立新租戶「${tenantName}」後，我將協助您依序完成組織部門設定、團隊成員邀請與角色權限配置。您可以點擊下方的子任務開始，或直接向我詢問。`);
+
     const subTask = await createTaskAction('設定部門', 'sales', '主管', parentTask.id);
     // Seed initial child task guidance message
     await appendTaskMessageAction(subTask.id, 'assistant', `您好！我是部門設定助理。新租戶「${tenantName}」建立完成後，首要步驟是建立組織部門。請問您想先新增哪一個部門？`);
-    await fetchTasks('sales');
+    await fetchTasks();
   } catch (e) {
     console.warn("Failed to create onboarding tasks on tenant creation:", e);
   }
@@ -592,12 +596,12 @@ export async function createTenantAction(tenantName, companyName, tenantCode, ta
 
 /**
  * Fetch tasks from SQLite
- * @param {string} [moduleId]
+ * @param {string | null} [moduleId]
  * @returns {Promise<any[]>}
  */
-export async function fetchTasks(moduleId = 'sales') {
+export async function fetchTasks(moduleId = null) {
   try {
-    const list = await invoke('list_tasks', { moduleId });
+    const list = await invoke('list_tasks', { moduleId: moduleId ? moduleId.trim() : '' });
     appState.tasks = list || [];
     return appState.tasks;
   } catch (err) {
@@ -622,7 +626,7 @@ export async function createTaskAction(title, moduleId, assignee, parentTaskId =
       assignee,
       parentTaskId: parentTaskId || null
     });
-    await fetchTasks(moduleId);
+    await fetchTasks();
     return task;
   } catch (err) {
     console.error("Failed to create task:", err);
@@ -684,7 +688,7 @@ export async function appendTaskMessageAction(taskId, role, content) {
 export async function updateTaskStatusAction(taskId, status) {
   try {
     await invoke('update_task_status', { taskId, status });
-    await fetchTasks(appState.activeWorkspace || 'sales');
+    await fetchTasks();
   } catch (err) {
     console.error("Failed to update task status:", err);
   }
@@ -713,7 +717,7 @@ export async function completeDepartmentSetupTask(taskId, departmentName = '銷�
  */
 export async function initMainChatGreeting() {
   try {
-    const tasks = await fetchTasks(appState.activeWorkspace || 'sales');
+    const tasks = await fetchTasks();
     const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length;
     
     const mainMsgs = await invoke('get_task_messages', { taskId: 'main' });

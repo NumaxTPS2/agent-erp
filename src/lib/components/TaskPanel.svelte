@@ -1,7 +1,7 @@
 <script>
   import { appState, switchActiveTask } from '../store.svelte.js';
 
-  let isCollapsed = $state(false);
+  let isCollapsed = $derived(appState.isTaskPanelCollapsed);
 
   let pendingCount = $derived(
     appState.tasks.filter(t => t.status === 'pending' || t.status === 'in_progress').length
@@ -70,7 +70,7 @@
 
       <button 
         class="collapse-btn" 
-        onclick={() => isCollapsed = true}
+        onclick={() => appState.isTaskPanelCollapsed = true}
         title="收合任務面板" 
         aria-label="收合任務面板"
       >
@@ -166,11 +166,10 @@
       {/if}
     </div>
   {:else}
-    <!-- Collapsed minimal strip -->
     <div class="collapsed-strip">
       <button 
         class="expand-btn" 
-        onclick={() => isCollapsed = false}
+        onclick={() => appState.isTaskPanelCollapsed = false}
         title="展開任務面板" 
         aria-label="展開任務面板"
       >

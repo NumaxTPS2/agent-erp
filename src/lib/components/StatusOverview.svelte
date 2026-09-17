@@ -23,6 +23,12 @@
     }
     return [];
   });
+
+  let isInstitutionsCollapsed = $state(true);
+
+  function handleTaskStatClick() {
+    appState.isTaskPanelCollapsed = false;
+  }
 </script>
 
 <aside class="overview-sidebar-container">
@@ -33,10 +39,16 @@
   <div class="overview-scroll">
     <!-- Top Stat Tiles -->
     <div class="stat-tiles-row">
-      <div class="stat-tile">
+      <button 
+        type="button" 
+        class="stat-tile clickable-tile" 
+        onclick={handleTaskStatClick}
+        title="點擊展開左側任務面板"
+        aria-label="檢視待處理任務"
+      >
         <span class="stat-number amber">{pendingTasksCount}</span>
         <span class="stat-label">待處理任務</span>
-      </div>
+      </button>
       <div class="stat-tile">
         <span class="stat-number cyan">{unreadNotificationsCount}</span>
         <span class="stat-label">未讀通知</span>
@@ -67,23 +79,36 @@
       {/if}
     </div>
 
-    <!-- Other Public Institutions Section -->
+    <!-- Other Public Institutions Section (Collapsible) -->
     <div class="section-group">
       <div class="section-header-row">
-        <span class="section-title">其他往來公家單位（客戶快搜可查到）</span>
-        <span class="badge-mock">情境示意</span>
+        <button 
+          type="button" 
+          class="collapse-toggle-btn" 
+          onclick={() => isInstitutionsCollapsed = !isInstitutionsCollapsed}
+          title={isInstitutionsCollapsed ? '展開情境示意' : '收合情境示意'}
+        >
+          <span class="section-title">其他往來公家單位</span>
+          <span class="badge-mock">情境示意</span>
+          <svg class="chevron-icon {isInstitutionsCollapsed ? '' : 'open'}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
       </div>
-      <p class="section-caption">
-        下列客戶僅示意「不只一家往來單位」，未做滿三段角色流程（中山國小已有獨立的新任務示範，見上方「受理客戶採購需求」卡片）。
-      </p>
 
-      <div class="client-card">
-        <div class="client-icon">🏛️</div>
-        <div class="client-info">
-          <span class="client-name">台北市政府</span>
-          <span class="client-type">共同供應契約客戶</span>
+      {#if !isInstitutionsCollapsed}
+        <p class="section-caption">
+          下列客戶僅示意「不只一家往來單位」，未做滿三段角色流程（中山國小已有獨立的新任務示範）。
+        </p>
+
+        <div class="client-card">
+          <div class="client-icon">🏛️</div>
+          <div class="client-info">
+            <span class="client-name">台北市政府</span>
+            <span class="client-type">共同供應契約客戶</span>
+          </div>
         </div>
-      </div>
+      {/if}
     </div>
   </div>
 </aside>
@@ -188,6 +213,43 @@
     gap: 8px;
   }
 
+  .stat-tile.clickable-tile {
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    outline: none;
+    font-family: inherit;
+    text-align: center;
+  }
+
+  .stat-tile.clickable-tile:hover {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.4);
+    transform: translateY(-1px);
+  }
+
+  .collapse-toggle-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    gap: 8px;
+    font-family: inherit;
+  }
+
+  .chevron-icon {
+    color: var(--text-muted);
+    transition: transform var(--transition-fast);
+  }
+
+  .chevron-icon.open {
+    transform: rotate(180deg);
+  }
+
   .badge-mock {
     font-size: 0.68rem;
     padding: 2px 6px;
@@ -196,6 +258,7 @@
     color: var(--text-muted);
     border: 1px solid var(--border-color);
     font-weight: 500;
+    margin-left: auto;
   }
 
   .section-caption {
