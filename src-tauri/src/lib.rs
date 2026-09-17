@@ -46,6 +46,15 @@ pub(crate) fn get_db_path<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -
     }
 }
 
+// Check if demo seeding is explicitly enabled via environment variable
+fn parse_seed_demo_flag(raw: Option<&str>) -> bool {
+    raw.map(|v| v == "1").unwrap_or(false)
+}
+
+fn should_seed_demo_data() -> bool {
+    parse_seed_demo_flag(std::env::var("AGENT_ERP_SEED_DEMO_DATA").ok().as_deref())
+}
+
 // Database Initialization (SQLite)
 fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), String> {
     let db_path = get_db_path(app_handle);
@@ -182,12 +191,12 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
         ).map_err(|e| format!("Failed to seed order: {}", e))?;
     }
 
-    // Seed default mock users and tenants if users table is empty
+    // Seed default mock users and tenants if users table is empty and AGENT_ERP_SEED_DEMO_DATA=1 is explicitly set
     let mut stmt_users = conn
         .prepare("SELECT count(*) FROM users")
         .map_err(|e| e.to_string())?;
     let users_count: i64 = stmt_users.query_row([], |row| row.get(0)).unwrap_or(0);
-    if users_count == 0 {
+    if users_count == 0 && should_seed_demo_data() {
         // Sha256 hash of "password123"
         let password_hash = "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f";
 
@@ -584,4 +593,50 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_seed_demo_flag_equivalence_and_boundaries() {
+        // Given: Various input values for AGENT_ERP_SEED_DEMO_DATA (normal, boundary, invalid)
+        let cases = vec![
+            // Normal / Equivalence - Valid opt-in flag
+            (Some("1"), true, "Valid opt-in flag '1'"),
+            // Boundary values - Non-1 values
+            (Some("0"), false, "Boundary '0' must not enable demo seed"),
+            (
+                Some("true"),
+                false,
+                "String 'true' must not enable demo seed",
+            ),
+            (Some(""), false, "Empty string must not enable demo seed"),
+            (
+                Some(" 1 "),
+                false,
+                "String with spaces must not enable demo seed",
+            ),
+            (Some("-1"), false, "Boundary '-1' must not enable demo seed"),
+            // Boundary value - None / Unset
+            (
+                None,
+                false,
+                "None (unset) must default to false for production safety",
+            ),
+        ];
+
+        for (input, expected, description) in cases {
+            // When: Parsing the flag value
+            let actual = parse_seed_demo_flag(input);
+
+            // Then: Output must strictly match expected boolean
+            assert_eq!(
+                actual, expected,
+                "Failed case: {} (input: {:?})",
+                description, input
+            );
+        }
+    }
 }

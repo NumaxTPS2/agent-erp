@@ -50,11 +50,16 @@ npm run build      # 前端靜態資源建置
 
 | 變數 | 必填 | 說明 |
 |---|---|---|
+| `AGENT_ERP_SEED_DEMO_DATA` | 否 | 設為 `1` 時，會在本地 SQLite 資料庫為空時自動寫入預設測試帳號（`admin@example.com` / `password123` 等）與租戶種子資料。未設定或為其他值則不寫入（正式發佈預設安全不啟用） |
 | `TPS2_BASE_URL` | 是 | TPS2 環境的 base URL（例如 `https://api-tps2-dev.numax.com.tw`）。留空或不設定則走本地 mock |
 | `CF_ACCESS_CLIENT_ID` | 視環境而定 | 若目標環境有 Cloudflare Access 保護才需要，對應 `CF-Access-Client-Id` header |
 | `CF_ACCESS_CLIENT_SECRET` | 視環境而定 | 若目標環境有 Cloudflare Access 保護才需要，對應 `CF-Access-Client-Secret` header |
 
 ```bash
+# 本地開發需要預設測試帳號時：
+AGENT_ERP_SEED_DEMO_DATA=1 npm run tauri dev
+
+# 對接真實 TPS2 環境時：
 TPS2_BASE_URL=https://api-tps2-dev.numax.com.tw \
 CF_ACCESS_CLIENT_ID=xxx \
 CF_ACCESS_CLIENT_SECRET=xxx \
