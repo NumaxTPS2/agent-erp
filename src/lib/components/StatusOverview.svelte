@@ -24,8 +24,6 @@
     return [];
   });
 
-  let isInstitutionsCollapsed = $state(true);
-
   function handleTaskStatClick() {
     if (appState.taskPanelCollapsed) {
       setTaskPanelCollapsed(false);
@@ -77,38 +75,6 @@
               </p>
             </div>
           {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Other Public Institutions Section (Collapsible) -->
-    <div class="section-group">
-      <div class="section-header-row">
-        <button 
-          type="button" 
-          class="collapse-toggle-btn" 
-          onclick={() => isInstitutionsCollapsed = !isInstitutionsCollapsed}
-          title={isInstitutionsCollapsed ? '展開情境示意' : '收合情境示意'}
-        >
-          <span class="section-title">其他往來公家單位</span>
-          <span class="badge-mock">情境示意</span>
-          <svg class="chevron-icon {isInstitutionsCollapsed ? '' : 'open'}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-      </div>
-
-      {#if !isInstitutionsCollapsed}
-        <p class="section-caption">
-          下列客戶僅示意「不只一家往來單位」，未做滿三段角色流程（中山國小已有獨立的新任務示範）。
-        </p>
-
-        <div class="client-card">
-          <div class="client-icon">🏛️</div>
-          <div class="client-info">
-            <span class="client-name">台北市政府</span>
-            <span class="client-type">共同供應契約客戶</span>
-          </div>
         </div>
       {/if}
     </div>
@@ -175,6 +141,20 @@
     border-color: rgba(255, 255, 255, 0.15);
   }
 
+  .stat-tile.clickable-tile {
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    outline: none;
+    font-family: inherit;
+    text-align: center;
+  }
+
+  .stat-tile.clickable-tile:hover {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.4);
+    transform: translateY(-1px);
+  }
+
   .stat-number {
     font-size: 1.75rem;
     font-weight: 700;
@@ -206,67 +186,6 @@
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--text-secondary);
-  }
-
-  .section-header-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .stat-tile.clickable-tile {
-    cursor: pointer;
-    border: 1px solid var(--border-color);
-    outline: none;
-    font-family: inherit;
-    text-align: center;
-  }
-
-  .stat-tile.clickable-tile:hover {
-    background: rgba(245, 158, 11, 0.08);
-    border-color: rgba(245, 158, 11, 0.4);
-    transform: translateY(-1px);
-  }
-
-  .collapse-toggle-btn {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: pointer;
-    color: inherit;
-    gap: 8px;
-    font-family: inherit;
-  }
-
-  .chevron-icon {
-    color: var(--text-muted);
-    transition: transform var(--transition-fast);
-  }
-
-  .chevron-icon.open {
-    transform: rotate(180deg);
-  }
-
-  .badge-mock {
-    font-size: 0.68rem;
-    padding: 2px 6px;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-muted);
-    border: 1px solid var(--border-color);
-    font-weight: 500;
-    margin-left: auto;
-  }
-
-  .section-caption {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    line-height: 1.45;
   }
 
   /* Empty Notification Box */
@@ -328,38 +247,5 @@
     color: var(--text-secondary);
     line-height: 1.35;
     padding-left: 18px;
-  }
-
-  /* Client Card */
-  .client-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: rgba(255, 255, 255, 0.025);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    padding: 10px 12px;
-  }
-
-  .client-icon {
-    font-size: 1.2rem;
-  }
-
-  .client-info {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-grow: 1;
-  }
-
-  .client-name {
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .client-type {
-    font-size: 0.75rem;
-    color: var(--text-muted);
   }
 </style>

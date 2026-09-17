@@ -17,7 +17,8 @@
     logoutAction,
     simulateTokenExpiry,
     fetchTasks,
-    initMainChatGreeting
+    initMainChatGreeting,
+    switchActiveTask
   } from './lib/store.svelte.js';
   import ChatBox from './lib/components/ChatBox.svelte';
   import TaskPanel from './lib/components/TaskPanel.svelte';
