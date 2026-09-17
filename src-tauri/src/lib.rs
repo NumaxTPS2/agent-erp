@@ -193,13 +193,20 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
 
         conn.execute(
             "INSERT INTO users (id, email, password, name) VALUES (?1, ?2, ?3, ?4)",
-            ("usr_mock_admin", "admin@example.com", password_hash, "Admin User"),
-        ).map_err(|e| format!("Failed to seed admin user: {}", e))?;
+            (
+                "usr_mock_admin",
+                "admin@example.com",
+                password_hash,
+                "Admin User",
+            ),
+        )
+        .map_err(|e| format!("Failed to seed admin user: {}", e))?;
 
         conn.execute(
             "INSERT INTO users (id, email, password, name) VALUES (?1, ?2, ?3, ?4)",
             ("usr_mock_new", "new@example.com", password_hash, "New User"),
-        ).map_err(|e| format!("Failed to seed new user: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to seed new user: {}", e))?;
 
         conn.execute(
             "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -214,12 +221,14 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
         conn.execute(
             "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
             ("usr_mock_admin", "tnt_mock_1", "admin"),
-        ).map_err(|e| format!("Failed to seed user_tenant 1: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to seed user_tenant 1: {}", e))?;
 
         conn.execute(
             "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
             ("usr_mock_admin", "tnt_mock_2", "member"),
-        ).map_err(|e| format!("Failed to seed user_tenant 2: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to seed user_tenant 2: {}", e))?;
     }
 
     Ok(())
