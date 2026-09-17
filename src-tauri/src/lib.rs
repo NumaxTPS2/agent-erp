@@ -182,6 +182,46 @@ fn init_db<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) -> Result<(), St
         ).map_err(|e| format!("Failed to seed order: {}", e))?;
     }
 
+    // Seed default mock users and tenants if users table is empty
+    let mut stmt_users = conn
+        .prepare("SELECT count(*) FROM users")
+        .map_err(|e| e.to_string())?;
+    let users_count: i64 = stmt_users.query_row([], |row| row.get(0)).unwrap_or(0);
+    if users_count == 0 {
+        // Sha256 hash of "password123"
+        let password_hash = "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f";
+
+        conn.execute(
+            "INSERT INTO users (id, email, password, name) VALUES (?1, ?2, ?3, ?4)",
+            ("usr_mock_admin", "admin@example.com", password_hash, "Admin User"),
+        ).map_err(|e| format!("Failed to seed admin user: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO users (id, email, password, name) VALUES (?1, ?2, ?3, ?4)",
+            ("usr_mock_new", "new@example.com", password_hash, "New User"),
+        ).map_err(|e| format!("Failed to seed new user: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            ("tnt_mock_1", "numax", "Numax Office", "Numax Inc.", Option::<String>::None),
+        ).map_err(|e| format!("Failed to seed tenant 1: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO tenants (id, code, name, company_name, tax_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+            ("tnt_mock_2", "alpha", "Alpha Corporation", "Alpha Corp.", Option::<String>::None),
+        ).map_err(|e| format!("Failed to seed tenant 2: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
+            ("usr_mock_admin", "tnt_mock_1", "admin"),
+        ).map_err(|e| format!("Failed to seed user_tenant 1: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO user_tenants (user_id, tenant_id, role) VALUES (?1, ?2, ?3)",
+            ("usr_mock_admin", "tnt_mock_2", "member"),
+        ).map_err(|e| format!("Failed to seed user_tenant 2: {}", e))?;
+    }
+
     Ok(())
 }
 
